@@ -10,7 +10,7 @@ Bitcoin Core · Fulcrum · Mempool · Tor · built-in explorer · verified walle
 
 [![CI](https://github.com/G0SHA256/bitfedot/actions/workflows/ci.yml/badge.svg)](https://github.com/G0SHA256/bitfedot/actions/workflows/ci.yml)
 ![Public domain](https://img.shields.io/badge/license-Unlicense%20(public%20domain)-blue)
-![Fedora 41+](https://img.shields.io/badge/Fedora-41%2B-51a2da?logo=fedora&logoColor=white)
+![Fedora 45+](https://img.shields.io/badge/Fedora-45%2B-51a2da?logo=fedora&logoColor=white)
 ![GTK 4 · libadwaita](https://img.shields.io/badge/GTK%204-libadwaita-4a86cf)
 ![No PyPI dependencies](https://img.shields.io/badge/dependencies-stdlib%20%2B%20PyGObject-2ec27e)
 
@@ -45,6 +45,7 @@ every file it manages is generated from one settings file by one function.
 | **Built-in explorer** | Native front end to *your own* Mempool API: fees, mempool, blocks, transactions, addresses. Lookups never leave the machine. |
 | **Verified apps** | Optional, each checked against its developers' pinned key on install *and* update: **Sparrow** (pre-wired to your node) · **Mullvad VPN**, **Obscura VPN** · **Tor Browser**, **Mullvad Browser**, **LibreWolf** · **Element**, **SimpleX**. |
 | **Fedora hardening** | Security check-up (SELinux, firewall, LUKS, Secure Boot…), systemd sandbox for every service, strict firewalld zone, system-wide **VPN kill switch** (nftables), private transaction broadcast. |
+| **Hardware keys** *(experimental)* | A staged, script-by-script setup that moves disk encryption, login, sudo and release signing onto two YubiKeys, and removes the password only after both keys are proven to work. Key preparation and the signing key are proven on real YubiKeys; the disk and login stages are not yet — see [docs/HARDWARE-KEYS.md](docs/HARDWARE-KEYS.md). |
 | **Safe by construction** | Any change that needs a restart stops services dependents-first and waits for clean shutdowns (Mempool → Fulcrum → Bitcoin Core → Tor), then starts them in reverse. Stop/start one or all; quitting asks: *run in background* or *shut down safely*. |
 | **Updates** | Node software, apps, Fedora *and BitFedot itself*: check (through Tor when it is up), download, verify, install, restart. BitFedot installs its own update only from a release signed with the key it already carries, tests it first, and keeps the previous version for one-click rollback. |
 | **Feels native** | libadwaita, light / dark / system theme, tray icon, runs in the background. |
@@ -70,7 +71,7 @@ every file it manages is generated from one settings file by one function.
 
 | | Minimum | Recommended |
 |---|---|---|
-| **Fedora** | Fedora 41 Workstation | **The current Fedora Workstation release** — BitFedot is developed and tested on Fedora 45 (GNOME). KDE Plasma should work but is not tested yet. |
+| **Fedora** | **Fedora 45 Workstation** | The current Fedora Workstation release, fully updated. BitFedot is developed and tested on Fedora 45 (GNOME); KDE Plasma should work but is not tested yet. Older releases are not supported: the wizard warns and they miss security fixes BitFedot counts on. |
 | **CPU** | 64-bit, x86_64 or aarch64, 2 cores | 4 cores or more (verification uses all of them) |
 | **RAM** | 8 GB | **16 GB or more.** Half of your RAM, up to 24 GB, is used as cache during the first sync, so more memory means a much faster sync. |
 | **Storage** | **1.3 TB free** | **2 TB SSD or NVMe.** The chain grows by roughly 100 GB a year. A spinning disk works but makes the first sync take several times longer. |
@@ -268,12 +269,14 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
 - the sync-time model against the first hours of a real sync log;
 - the self-updater with a throw-away signing key: signed release installed and rolled back;
   unsigned, tampered, mislabelled and older releases refused;
-- 54 offline unit tests.
+- 73 offline unit tests.
 
 **Not yet verified end to end:** the post-sync hand-over on a fully synced chain; Fulcrum's
 initial indexing; updates across real version bumps; everything that needs root on a live system
 (RPM-based app installs, firewall zone, kill switch, Fedora updates — development had no root);
 self-update against a real GitHub release (none exists yet);
+the disk-encryption, login and password-removal stages of the hardware-key setup (the key
+preparation and signing-key stages have been run on two real YubiKeys);
 the optional apps actually *launching*; the sync estimate over a complete sync; the tray icon
 under the GNOME extension and KDE. Reports are very welcome.
 
@@ -301,6 +304,7 @@ BITFEDOT_EXPLORER_API=https://mempool.space \
 | [`bitfedot/selfupdate.py`](bitfedot/selfupdate.py), [`pins.py`](bitfedot/pins.py) | signed self-update; vouched-for image digests |
 | [`bitfedot/hardening.py`](bitfedot/hardening.py) | check-up, firewall, kill switch, Fedora updates |
 | [`bitfedot/eta.py`](bitfedot/eta.py) | sync time model |
+| [`bitfedot/hardware_keys.py`](bitfedot/hardware_keys.py) | staged YubiKey setup (script generation, gates) |
 | [`bitfedot/explorer.py`](bitfedot/explorer.py) | Mempool REST client |
 | [`bitfedot/node.py`](bitfedot/node.py), [`agent.py`](bitfedot/agent.py) | status snapshot, actions, background agent |
 | [`bitfedot/ui/`](bitfedot/ui) | one module per page; no business logic |

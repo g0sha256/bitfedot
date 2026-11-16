@@ -6,6 +6,7 @@ License:        Unlicense
 URL:            https://github.com/G0SHA256/bitfedot
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      noarch
+# Built and tested for Fedora 45 and newer
 
 BuildRequires:  python3-devel
 BuildRequires:  desktop-file-utils

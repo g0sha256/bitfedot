@@ -17,6 +17,8 @@ os.environ["BITFEDOT_ROOT"] = tempfile.mkdtemp(prefix="bitfedot-test-")
 
 from bitfedot import (about, apps, eta, explorer, hardening, installer, migrate, net, paths,  # noqa: E402
                       pins, selfupdate, services, settings, system, verify)
+from bitfedot import hardware_keys as hk  # noqa: E402
+from bitfedot import ykpins  # noqa: E402
 from bitfedot.catalog import CATALOG, CATEGORIES  # noqa: E402
 from bitfedot.paths import U_BITCOIND, U_FULCRUM, U_MEMPOOL, U_TOR  # noqa: E402
 
@@ -425,6 +427,272 @@ class SelfUpdate(unittest.TestCase):
         self.assertFalse(selfupdate._stage_dir().exists())
 
 
+class HardwareKeys(unittest.TestCase):
+    U1, U2 = "11111111-2222-4333-8444-555555555555", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    DEVS = [{"device": "/dev/nvme0n1p3", "uuid": U1, "mapper": "luks-" + U1},
+            {"device": "/dev/sda1", "uuid": U2, "mapper": "luks-" + U2}]
+
+    def scripts(self):
+        return {
+            "prepare": hk.prepare_script(),
+            "key": hk.key_script("main", reset=True),
+            "key-noreset": hk.key_script("backup", reset=False),
+            "pgp-clone": hk.pgp_script("clone", "BitFedot release", "me@example.org", "/home/me/keys"),
+            "pgp-separate": hk.pgp_script("separate", "BitFedot release", "me@example.org", "/home/me/keys"),
+            "disk": hk.disk_script(self.DEVS),
+            "disk-plain": hk.disk_script(self.DEVS, plain_boot=True),
+            "boot": hk.boot_script(self.DEVS),
+            "login": hk.login_script("fedora"),
+            "finalize": hk.finalize_script(self.DEVS, "fedora", recovery_key=True),
+            "revert": hk.revert_script(self.DEVS, "fedora"),
+        }
+
+    def test_every_script_is_valid_shell(self):
+        everything = {**self.scripts(), "finalize-bare": hk.finalize_script(self.DEVS, "fedora", False)}
+        for name, text in everything.items():
+            self.assertNotIn("{{", text, name)                     # an unexpanded template brace
+            self.assertNotIn("}}", text, name)
+        for name, text in self.scripts().items():
+            p = system.run(["bash", "-n"], input=text)
+            self.assertEqual(p.returncode, 0, f"{name}: {p.stderr}")
+            self.assertIn("set -euo pipefail", text, name)
+
+    def test_only_the_final_script_removes_anything(self):
+        s = self.scripts()
+        for name, text in s.items():
+            destructive = "--wipe-slot=password" in text or "passwd -l" in text
+            self.assertEqual(destructive, name == "finalize", name)
+        self.assertIn(hk.CONFIRM_PHRASE, s["finalize"])
+        self.assertIn("--recovery-key", s["finalize"])
+        bare = hk.finalize_script(self.DEVS, "fedora", recovery_key=False)
+        self.assertNotIn("--recovery-key", bare)
+        self.assertIn("LOST FOREVER", bare)                         # said in red, and must be typed away
+        self.assertIn("ONLY MY KEYS", bare)
+        self.assertLess(bare.index("ONLY MY KEYS"), bare.index("--wipe-slot"))
+        self.assertIn('--kver "$(uname -r)"', s["disk"])           # older kernels stay as a fallback
+        self.assertEqual(s["disk"].count("systemd-cryptenroll --fido2-device=auto"), 2)   # one per volume
+        self.assertIn("/dev/shm", s["pgp-clone"])                  # the cloned key never touches the disk
+        for mode in ("pgp-clone", "pgp-separate"):                 # gpgconf lists it even when it is missing
+            self.assertIn('[ -x "$(gpgconf --list-dirs libexecdir)/scdaemon" ] || missing+=(gnupg2-scdaemon)', s[mode])
+        for name, text in s.items():                               # every step installs its own tools
+            self.assertEqual("\nneed_tools\n" in text, name != "revert", name)
+
+    def test_password_removal_is_gated_on_both_keys(self):
+        hw = {"main": "111111", "backup": "222222", "disk": True, "boot_ok": ["111111"], "login_ok": ["111111"]}
+        ok, missing = hk.ready_to_finalize(hw)
+        self.assertFalse(ok)
+        self.assertEqual(len(missing), 2)                          # backup: boot and sudo unproven
+        hw.update(boot_ok=["111111", "222222"], login_ok=["111111", "222222"])
+        self.assertEqual(hk.ready_to_finalize(hw), (True, []))
+        self.assertFalse(hk.ready_to_finalize({**hw, "backup": "111111"})[0])     # same key twice
+        self.assertFalse(hk.ready_to_finalize({**hw, "disk": False})[0])
+
+    def test_boot_confirmation_needs_evidence_and_exactly_one_known_key(self):
+        hw = {"main": "111111", "backup": "222222"}
+        self.assertIsNone(hk.confirm_boot(hw, {"plugged": ["111111"], "fido2_boot": False})[0])
+        self.assertIsNone(hk.confirm_boot(hw, {"plugged": ["111111", "222222"], "fido2_boot": True})[0])
+        self.assertIsNone(hk.confirm_boot(hw, {"plugged": ["999999"], "fido2_boot": True})[0])
+        self.assertEqual(hk.confirm_boot(hw, {"plugged": ["222222"], "fido2_boot": True})[0], "222222")
+        self.assertEqual(hk.confirm_boot(hw, {"plugged": ["111111"], "fido2_boot": False}, user_vouches=True)[0],
+                         "111111")
+
+    def test_steps_count_as_done_only_when_their_script_finished(self):
+        s = self.scripts()
+        self.assertLess(s["disk"].index("sudo dracut --force"), s["disk"].index('touch "$STATE/hwkey-disk.done"'))
+        self.assertLess(s["finalize"].index("passwd -l"), s["finalize"].index('touch "$STATE/hwkey-final.done"'))
+        paths.ensure_dirs()
+        marker = paths.CONFIG_DIR / "hwkey-disk.done"
+        marker.unlink(missing_ok=True)
+        settings.update(hwkeys={})
+        self.assertFalse(hk.adopt_serials().get("disk"))
+        marker.touch()
+        self.assertTrue(hk.adopt_serials().get("disk"))
+        marker.unlink()
+
+    def test_polled_facts_never_talk_to_the_key(self):
+        """Opening the key from a poll resets it under a running script (a real bug once)."""
+        with mock.patch.object(hk, "plugged_serials", side_effect=AssertionError("polled the key")), \
+                mock.patch.object(system, "have", lambda b: True):
+            f = hk.facts()
+            hk.health(f, {"main": "111111"})
+        self.assertIn("present", f)
+        self.assertNotIn("plugged", f)
+
+    def test_hostile_input_is_rejected(self):
+        bad_dev = [{"device": "/dev/sda1; rm -rf /", "uuid": "", "mapper": "luks-" + self.U1}]
+        bad_map = [{"device": "/dev/sda1", "uuid": "", "mapper": "luks-x; reboot"}]
+        with self.assertRaises(ValueError):
+            hk.boot_script(bad_map)
+        for call in (lambda: hk.disk_script(bad_dev, False), lambda: hk.finalize_script(bad_dev, "fedora", True),
+                     lambda: hk.login_script("root; reboot"), lambda: hk.key_script("third", False),
+                     lambda: hk.pgp_script("clone", "x`id`", "me@example.org", "/tmp"),
+                     lambda: hk.pgp_script("clone", "Name", "not-an-address", "/tmp")):
+            with self.assertRaises(ValueError):
+                call()
+
+    def test_setup_survives_updates(self):
+        s = self.scripts()
+        for needle in (hk.PROTECTED, hk.KERNEL_HOOK, "/etc/kernel/cmdline", "/etc/default/grub",
+                       "dnf mark user"):
+            self.assertIn(needle, s["disk"], needle)
+        for needle in (hk.GUARD, hk.GUARD_UNITS[0], hk.GUARD_UNITS[1], hk.SAVED, hk.PROTECTED):
+            self.assertIn(needle, s["login"], needle)
+        for needle in (hk.GUARD, hk.KERNEL_HOOK, hk.PROTECTED, hk.SAVED):     # Undo removes every guard
+            self.assertIn(needle, s["revert"], needle)
+        for text in (hk.KERNEL_HOOK_TEXT, hk.GUARD_TEXT):
+            self.assertEqual(system.run(["bash", "-n"], input=text).returncode, 0)
+        self.assertTrue(hk.KERNEL_HOOK_TEXT.rstrip().endswith("exit 0"))       # never blocks a kernel update
+
+    def test_boot_argument_edits(self):
+        """The sed programs that drop 'rhgb' for future kernels, on sample files."""
+        paths.ensure_dirs()
+        cmdline, grub = paths.DATA_DIR / "cmdline", paths.DATA_DIR / "grub"
+        cmdline.write_text("root=UUID=x ro rd.luks.uuid=luks-a rhgb quiet video=DP-2:1920x1080@60\n")
+        grub.write_text('GRUB_TIMEOUT=5\nGRUB_CMDLINE_LINUX="rd.luks.uuid=luks-a rhgb quiet"\n')
+        script = hk.disk_script(self.DEVS, plain_boot=True)
+        for target, f in (("/etc/kernel/cmdline", cmdline), ("/etc/default/grub", grub)):
+            line = next(ln for ln in script.splitlines() if ln.startswith(f"[ -f {target} ] && sudo sed"))
+            command = line.split("&& sudo ", 1)[1].replace(target, str(f))
+            system.run(["bash", "-c", command], check=True)
+        self.assertEqual(cmdline.read_text(), "root=UUID=x ro rd.luks.uuid=luks-a quiet video=DP-2:1920x1080@60\n")
+        self.assertNotIn("rhgb", grub.read_text())
+        self.assertIn("GRUB_TIMEOUT=5", grub.read_text())
+
+    def test_health_flags_dangerous_states(self):
+        ok = {"password_locked": False, "pam_u2f": False}
+        self.assertEqual(hk.health(ok, {}), [])                               # not set up: nothing to report
+        hw = {"main": "111111", "backup": "222222", "disk": False}
+        locked_out = hk.health({"password_locked": True, "pam_u2f": False}, hw)
+        self.assertTrue(any(sev == "critical" and "locked" in text for sev, text in locked_out))
+
+    def test_boot_asks_once(self):
+        """One PIN, one touch: graphical screen, volumes in sequence, extra volumes PIN-only."""
+        s = self.scripts()
+        first_unit = "systemd-cryptsetup@luks\\x2d" + self.U1.replace("-", "\\x2d") + ".service"
+        for name in ("disk", "boot"):
+            self.assertIn("After=" + first_unit, s[name], name)              # others wait for the first
+            self.assertIn(hk.ORDER_DROPIN, s[name])
+            self.assertIn(f'install_items+=" {hk.ORDER_DROPIN} "', s[name])  # … also inside the boot image
+            self.assertIn('--args="rhgb quiet"', s[name])
+            self.assertNotIn("--remove-args", s[name])
+        self.assertIn("--remove-args", s["disk-plain"])
+        # first volume keeps the touch, the additional one unlocks with the cached PIN alone
+        self.assertEqual(s["disk"].count("--fido2-with-user-presence=yes /dev/nvme0n1p3"), 1)
+        self.assertEqual(s["disk"].count("--fido2-with-user-presence=no /dev/sda1"), 1)
+        self.assertNotIn("/dev/nvme0n1p3", s["boot"].split("Tell the boot process")[0])   # first volume untouched
+        self.assertEqual(s["boot"].count("--wipe-slot=fido2"), 1)            # old entries replaced once
+        self.assertNotIn("--wipe-slot=password", s["boot"])
+
+    def test_crypttab_edit(self):
+        """The sed program from the disk script, run on sample crypttab lines."""
+        script = hk.disk_script(self.DEVS)
+        program = script.split("sudo sed -i -E '", 1)[1].split("' /etc/crypttab", 1)[0]
+        paths.ensure_dirs()
+        f = paths.DATA_DIR / "crypttab"
+        f.write_text("# comment stays\n"
+                     "luks-aaaa UUID=aaaa none discard\n"
+                     "luks-bbbb UUID=bbbb none\n"
+                     "luks-cccc UUID=cccc none discard,fido2-device=auto\n")
+        system.run(["sed", "-i", "-E", program, str(f)], check=True)
+        self.assertEqual(f.read_text().splitlines(), [
+            "# comment stays",
+            "luks-aaaa UUID=aaaa none discard,fido2-device=auto",
+            "luks-bbbb UUID=bbbb none fido2-device=auto",
+            "luks-cccc UUID=cccc none discard,fido2-device=auto"])
+
+
+class YubiKeyPins(unittest.TestCase):
+    """PIN changes must survive interrupted sessions without burning PIN attempts."""
+
+    class Bad(Exception):
+        pass
+
+    def make(self, pin, fail_plan):
+        """A fake key holding `pin`; `fail_plan` = per-call behaviour:
+        'ok', 'interrupt-before' (nothing applied), 'interrupt-after' (applied, then error)."""
+        test = self
+        state = {"pin": pin, "calls": [], "verifies": 0}
+        plan = list(fail_plan)
+
+        class Session:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def change_pin(self, old, new):
+                step = plan.pop(0) if plan else "ok"
+                state["calls"].append(step)
+                if step == "interrupt-before":
+                    raise OSError("Card was reset")
+                if old != state["pin"]:
+                    raise test.Bad("wrong pin")
+                state["pin"] = new
+                if step == "interrupt-after":
+                    raise OSError("INVALID_INSTRUCTION")
+
+            def verify_pin(self, pin):
+                state["verifies"] += 1
+                if pin != state["pin"]:
+                    raise test.Bad("wrong pin")
+        return state, Session
+
+    def change(self, session_cls, old, new):
+        ykpins.change(session_cls, old, new, "change_pin", "verify_pin",
+                      lambda e: isinstance(e, self.Bad), sleep=lambda s: None)
+
+    def test_plain_change(self):
+        state, cls = self.make("123456", [])
+        self.change(cls, "123456", "new-pin")
+        self.assertEqual(state["pin"], "new-pin")
+
+    def test_interrupted_before_the_key_acted_is_simply_repeated(self):
+        state, cls = self.make("123456", ["interrupt-before", "interrupt-before", "ok"])
+        self.change(cls, "123456", "new-pin")
+        self.assertEqual((state["pin"], len(state["calls"]), state["verifies"]), ("new-pin", 3, 0))
+
+    def test_interrupted_after_the_key_acted_is_recognised(self):
+        state, cls = self.make("123456", ["interrupt-after"])
+        self.change(cls, "123456", "new-pin")            # retry sees "wrong pin", then confirms the new one
+        self.assertEqual((state["pin"], state["verifies"]), ("new-pin", 1))
+
+    def test_a_wrong_pin_is_never_retried(self):
+        state, cls = self.make("secret", [])
+        with self.assertRaises(ykpins.WrongPin):
+            self.change(cls, "123456", "new-pin")
+        self.assertEqual((state["pin"], len(state["calls"]), state["verifies"]), ("secret", 1, 0))
+
+    def test_pins_already_set_are_not_forced_again(self):
+        asked = []
+
+        def no(label):
+            asked.append(label)
+            return False
+        self.assertEqual(ykpins.plan(set(), no), {"pin": True, "admin": True})      # fresh key: must change
+        self.assertEqual(asked, [])
+        self.assertEqual(ykpins.plan({"pin", "admin"}, no), {"pin": False, "admin": False})
+        self.assertEqual(asked, ["PIN", "Admin PIN"])                                 # offered, not forced
+        self.assertEqual(ykpins.plan({"pin"}, no), {"pin": False, "admin": True})    # interrupted half-way
+        self.assertEqual(ykpins.plan({"pin", "admin"}, lambda label: True), {"pin": True, "admin": True})
+        paths.ensure_dirs()
+        f = paths.DATA_DIR / "key.done"
+        f.unlink(missing_ok=True)
+        ykpins.add_state(f, "pin")
+        ykpins.add_state(f, "pin")
+        self.assertEqual((f.read_text(), ykpins.read_state(f)), ("pin\n", {"pin"}))
+        self.assertEqual(ykpins.read_state(None), set())
+
+    def test_key_script_uses_the_helper_instead_of_idle_prompts(self):
+        script = hk.key_script("main", reset=True)
+        self.assertIn("ykpins.py", script)
+        self.assertNotIn("openpgp access change-pin", script)      # ykman would wait with the key open
+        self.assertIn('--state "$STATE/hwkey-$serial.done"', script)
+        self.assertIn("flock -n 9", script)                        # two steps at once fight over the key
+        self.assertIn("HUP INT TERM", script)                      # closing the window still wipes secrets
+        self.assertNotIn("Change it? [y/N]", script)               # a set FIDO2 PIN is simply kept
+
+
 class About(unittest.TestCase):
     def test_bundled_whitepaper_is_genuine_and_can_be_saved(self):
         target = about.save_whitepaper(paths.DATA_DIR / "saved")
@@ -445,6 +713,16 @@ class Misc(unittest.TestCase):
         self.assertTrue(net.is_newer("2.10.0", "2.9.9"))
         self.assertFalse(net.is_newer("32.1", "32.1"))
         self.assertFalse(net.is_newer("", "32.1"))
+
+    def test_fedora_release_detection(self):
+        paths.ensure_dirs()
+        f = paths.DATA_DIR / "os-release"
+        f.write_text('NAME="Fedora Linux"\nID=fedora\nVERSION_ID=45\n')
+        self.assertEqual(system.fedora_release(f), 45)
+        f.write_text('ID=ubuntu\nVERSION_ID="26.04"\n')
+        self.assertIsNone(system.fedora_release(f))
+        self.assertIsNone(system.fedora_release(paths.DATA_DIR / "missing"))
+        self.assertEqual(system.MIN_FEDORA, 45)
 
     def test_expected_hash(self):
         paths.ensure_dirs()

@@ -6,6 +6,7 @@ from .about import AboutPage
 from .apps import AppsPage
 from .connectivity import ConnectivityPage
 from .explorer import ExplorerPage
+from .hwkeys import HardwareKeysPage
 from .overview import OverviewPage
 from .pages import LogsPage, SettingsPage
 from .security import SecurityPage
@@ -33,7 +34,7 @@ class MainWindow(Adw.ApplicationWindow):
     def _build_main(self):
         demo = self.app.demo is not None
         self.pages = [OverviewPage(demo), ExplorerPage(demo), AppsPage(demo),
-                      ConnectivityPage(demo), SecurityPage(demo), UpdatesPage(demo),
+                      ConnectivityPage(demo), SecurityPage(demo), HardwareKeysPage(demo), UpdatesPage(demo),
                       LogsPage(demo), SettingsPage(demo, self.app), AboutPage(demo)]
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, vexpand=True)
         self.listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)

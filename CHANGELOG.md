@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-11-16
 
 First version intended for public release. The project was called *Nodestead* during early
 development; an install made under that name is detected and adopted in place.
@@ -24,6 +24,11 @@ development; an install made under that name is detected and adopted in place.
   before the switch, with rollback. `tools/release.sh` and `docs/RELEASING.md` for maintainers.
 - **Supply chain** controls: container images pinned and run by digest (`bitfedot/pins.py`), and
   a configurable number of required Bitcoin Core builder signatures.
+- **Hardware keys** (experimental, untested on hardware): staged YubiKey setup for LUKS, login,
+  sudo and release signing, with the password removed only after both keys are proven.
+- Hardware-key boot: graphical prompt, PIN asked once, one touch, also on systems whose disk
+  spans several encrypted volumes.
+- Optional automatic installation of signed BitFedot updates.
 - **About** page with credits and the Bitcoin whitepaper (open, or save to Documents/Desktop).
 - Light / dark / system theme.
 - `AGENTS.md` and `docs/EXTENDING.md` for contributors and coding assistants.
@@ -34,6 +39,7 @@ development; an install made under that name is detected and adopted in place.
 - Errors from background operations were not shown in the UI.
 
 ### Changed
+- **Fedora 45 is now the minimum** supported release; the wizard warns on anything older.
 - Renamed to **BitFedot** (app ID `io.github.g0sha256.BitFedot`, units `bitfedot-*`).
 - `services.apply()` is serialised with a lock and reports progress.
 

@@ -105,6 +105,25 @@ def is_rotational(path) -> bool:
     return False
 
 
+MIN_FEDORA = 45      # the release BitFedot is developed and tested on
+
+
+def fedora_release(os_release="/etc/os-release"):
+    """Fedora's release number, or None on anything else."""
+    try:
+        with open(os_release) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    info = dict(line.strip().split("=", 1) for line in lines if "=" in line)
+    if info.get("ID", "").strip('"') != "fedora":
+        return None
+    try:
+        return int(info.get("VERSION_ID", "").strip('"'))
+    except ValueError:
+        return None
+
+
 # Rough mainnet footprint (GB): blocks + chainstate, txindex, Fulcrum, Mempool DB.
 REQUIRED_GB = 1300
 

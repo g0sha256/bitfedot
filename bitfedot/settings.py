@@ -49,6 +49,8 @@ DEFAULTS = {
     "ks_allow_lan": True,
     "ks_endpoints": "",          # extra VPN server addresses allowed outside the tunnel
     "os_updates": {},            # last Fedora update check: count, security, reboot, checked
+    "hwkeys": {},                # hardware-key setup progress, see hardware_keys.state()
+    "auto_self_update": False,   # install signed BitFedot releases without asking
 
     # --- app behaviour ----------------------------------------------------
     "linger": True,              # keep the node running while logged out

@@ -240,8 +240,11 @@ def reboot_needed() -> bool:
 
 
 def install_os_updates(security_only=False):
+    """Returns warnings to show before the next restart (hardware-key boot support)."""
     as_root(["dnf upgrade -y --refresh" + (" --security" if security_only else "")], timeout=7200)
     check_os_updates()
+    from . import hardware_keys
+    return [text for _sev, text in hardware_keys.health()]
 
 
 def auto_updates_enabled() -> bool:
@@ -309,6 +312,12 @@ def checkup(s) -> list:
     if run(["systemctl", "is-active", "sshd"], timeout=10).stdout.strip() == "active":
         items.append({"title": "SSH server", "ok": None,
                       "detail": "sshd is running. Make sure it uses key authentication only."})
+    from . import hardware_keys          # optional feature; only reported once keys are set up
+    hw = hardware_keys.state(s)
+    if any(hw.get(r) for r in hardware_keys.ROLES):
+        problems = hardware_keys.health(hw=hw)
+        add("Hardware keys", not problems, "Boot and login settings for your keys are intact",
+            " ".join(text for _sev, text in problems))
     if s["killswitch"] or killswitch_active():
         active = killswitch_active()
         add("VPN kill switch", active, f"Active on {s['ks_iface']}", "Configured but not loaded")

@@ -13,7 +13,8 @@ window is closed:
 import time
 from pathlib import Path
 
-from . import __version__, eta, hardening, installer, net, node, rpc, services, settings, system
+from . import (__version__, eta, hardening, installer, net, node, rpc, selfupdate, services,
+               settings, system)
 
 TICK = 20
 DAY = 86400
@@ -68,6 +69,14 @@ def tick(state: dict):
         own = fresh["available"].get("bitfedot", "")
         if net.is_newer(own, __version__):
             pending = {**pending, "bitfedot": own}
+            if fresh["auto_self_update"] and selfupdate.status(fresh)["can_install"]:
+                try:                      # same checks as the Update button: signature, tests, no downgrade
+                    done = selfupdate.update()
+                    system.notify("BitFedot updated", f"Version {done['version']} was verified and installed. "
+                                                      "Restart BitFedot to use it.")
+                    pending.pop("bitfedot")
+                except Exception as e:
+                    print(f"agent: self-update refused: {e}", flush=True)
         if pending and pending != state.get("notified"):
             state["notified"] = pending
             system.notify("Updates available", ", ".join(

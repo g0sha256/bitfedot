@@ -224,6 +224,14 @@ INSTALL_STEPS = [
 def preflight(data_dir) -> list:
     """-> list of (severity, message); severity 'error' blocks installation."""
     issues = []
+    release = system.fedora_release()
+    if release is None:
+        issues.append(("warning", "This does not look like Fedora. BitFedot is built for Fedora "
+                                  f"{system.MIN_FEDORA} or newer and is untested elsewhere."))
+    elif release < system.MIN_FEDORA:
+        issues.append(("warning", f"This is Fedora {release}. BitFedot is built and tested for Fedora "
+                                  f"{system.MIN_FEDORA} or newer; upgrade Fedora first for current "
+                                  "security fixes and the features BitFedot relies on."))
     if system.arch() not in _BTC_PLATFORM:
         issues.append(("error", f"Unsupported CPU architecture: {system.arch()}"))
     free = system.disk_free_gb(data_dir)

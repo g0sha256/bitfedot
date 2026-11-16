@@ -56,6 +56,12 @@ class UpdatesPage(Gtk.Box):
         back.connect("clicked", lambda *_: self._rollback())
         self.rollback_row.add_suffix(back)
         g.add(self.rollback_row)
+        self.auto_self = Adw.SwitchRow(
+            title="Install BitFedot updates automatically",
+            subtitle="Only releases signed with the key this copy already carries, and only after the "
+                     "new version passes its own tests. You are notified; a restart of the app applies it.")
+        self.auto_self.connect("notify::active", lambda r, _p: self._auto_self(r.get_active()))
+        g.add(self.auto_self)
         page.add(g)
         self.self_busy = False
 
@@ -134,6 +140,10 @@ class UpdatesPage(Gtk.Box):
             self.self_btn.set_label(f"Update to {me['latest']}")
             self.self_btn.set_visible(me["newer"] and me["can_install"])
             self.rollback_row.set_visible(me["can_rollback"])
+            self.loading = True
+            self.auto_self.set_active(bool(s["auto_self_update"]))
+            self.auto_self.set_sensitive(me["can_install"] or bool(snap.get("demo")))
+            self.loading = False
         present = installer.components(s)
         for name, (row, btn, spinner, _result) in self.rows.items():
             row.set_visible(name in present)
@@ -198,6 +208,13 @@ class UpdatesPage(Gtk.Box):
             self.self_note.set_subtitle(f"✗ {error_text(e)}")
             toast(self, "BitFedot was not updated")
         run_async(lambda: selfupdate.update(report), done, failed)
+
+    def _auto_self(self, on):
+        if self.loading:
+            return
+        if self.demo:
+            return toast(self, "Demo mode — nothing is changed")
+        run_async(lambda: settings.update(auto_self_update=on), None, lambda e: toast(self, error_text(e)))
 
     def _rollback(self):
         if self.demo:
@@ -283,9 +300,9 @@ class UpdatesPage(Gtk.Box):
             return toast(self, "Demo mode — nothing is running")
         self._os_busy(True, "Installing updates with dnf — this can take several minutes…")
 
-        def done(_r=None):
+        def done(warnings=None):
             self._os_busy(False)
-            toast(self, "Fedora updates installed")
+            toast(self, warnings[0] if warnings else "Fedora updates installed")
             self.get_root().app.poll_now()
         run_async(lambda: hardening.install_os_updates(security_only), done,
                   lambda e: (self._os_busy(False), toast(self, error_text(e)),

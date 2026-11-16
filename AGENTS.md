@@ -42,6 +42,7 @@ Backend (no GTK imports; unit-testable):
 | `apps.py` | install/update/remove/launch for each catalog `kind` | a new delivery method |
 | `hardening.py` | security check-up, firewall, kill switch, Fedora updates, `as_root()` | anything needing root |
 | `eta.py` | sync time estimate (pure functions + sample file) | tuning the estimate |
+| `hardware_keys.py` | YubiKey setup: generates staged shell scripts, tracks gates. **Experimental**; can lock users out — change with great care | anything about LUKS/PAM/YubiKey |
 | `explorer.py` | Mempool REST client | explorer data |
 | `node.py` | `snapshot()` (status for the UI) and user actions | a new status field or action |
 | `agent.py` | headless loop: post-sync hand-over, VPN watch, daily checks | background behaviour |
