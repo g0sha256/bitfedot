@@ -61,7 +61,7 @@ class ServiceCard(Gtk.Box):
 
     def update(self, info, s):
         self.version.set_label(f"v{info['version']}" if info.get("version") else "")
-        self.pill.set_state(info["state"])
+        self.pill.set_state(info["state"], info.get("pill"))
         self.message.set_label(info.get("message", ""))
         self.message.set_tooltip_text(info.get("message", ""))
         self.enabled = bool(s[self.setting])
@@ -209,10 +209,13 @@ class OverviewPage(Gtk.ScrolledWindow):
             self.b_meta.set_label(f"Mined {fmt_ago(b['best_time'])}{txs}")
             if synced:
                 self.h_title.set_label("Fully synced")
+                still = [f"{name}: {snap[key]['message']}" for key, name in (("fulcrum", "Fulcrum"), ("mempool", "Mempool"))
+                         if s["phase"] == "ready" and snap[key]["state"] in ("syncing", "starting")]
                 txi = b.get("txindex") or {}
                 self.h_sub.set_label(
-                    "Every block verified by your own node." if txi.get("synced", True) or s["phase"] != "ready"
-                    else "Chain verified. Building the transaction index for Fulcrum and Mempool…")
+                    ("Every block verified by your own node." if txi.get("synced", True) or s["phase"] != "ready"
+                     else "Chain verified. Building the transaction index for Fulcrum and Mempool…")
+                    + ("\n" + "\n".join(still) if still else ""))
             else:
                 self.h_title.set_label("Syncing the blockchain")
                 if b.get("txs_total"):

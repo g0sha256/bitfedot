@@ -45,9 +45,10 @@ every file it manages is generated from one settings file by one function.
 | **Built-in explorer** | Native front end to *your own* Mempool API: fees, mempool, blocks, transactions, addresses. Lookups never leave the machine. |
 | **Verified apps** | Optional, each checked against its developers' pinned key on install *and* update: **Sparrow** (pre-wired to your node) · **Mullvad VPN**, **Obscura VPN** · **Tor Browser**, **Mullvad Browser**, **LibreWolf** · **Element**, **SimpleX**. |
 | **Fedora hardening** | Security check-up (SELinux, firewall, LUKS, Secure Boot…), systemd sandbox for every service, strict firewalld zone, system-wide **VPN kill switch** (nftables), private transaction broadcast. |
-| **Hardware keys** *(experimental)* | A staged, script-by-script setup that moves disk encryption, login, sudo and release signing onto two YubiKeys, and removes the password only after both keys are proven to work. Key preparation and the signing key are proven on real YubiKeys; the disk and login stages are not yet — see [docs/HARDWARE-KEYS.md](docs/HARDWARE-KEYS.md). |
+| **Hardware keys** *(experimental)* | Move disk encryption, login, sudo, the desktop keyring and release signing onto two YubiKeys — a main key and a backup — and then remove the password altogether. One PIN and one touch at boot. Run end to end on one computer so far; details [below](#hardware-keys-experimental). |
 | **Safe by construction** | Any change that needs a restart stops services dependents-first and waits for clean shutdowns (Mempool → Fulcrum → Bitcoin Core → Tor), then starts them in reverse. Stop/start one or all; quitting asks: *run in background* or *shut down safely*. |
 | **Updates** | Node software, apps, Fedora *and BitFedot itself*: check (through Tor when it is up), download, verify, install, restart. BitFedot installs its own update only from a release signed with the key it already carries, tests it first, and keeps the previous version for one-click rollback. |
+| **Keeps you posted** | Live status for every service — sync percentage, Fulcrum's index progress, the explorer catching up — in the app and tray, plus optional desktop notifications at milestones. |
 | **Feels native** | libadwaita, light / dark / system theme, tray icon, runs in the background. |
 
 <table>
@@ -249,6 +250,40 @@ Fulcrum logs are anonymised; Sparrow is configured to make no third-party reques
 
 Found a vulnerability? Please follow [SECURITY.md](SECURITY.md).
 
+## Hardware keys (experimental)
+
+BitFedot can take a Fedora machine from "a password protects everything" to "only my two
+YubiKeys do", one visible step at a time. Each step is a plain shell script you can read first and
+that runs in a terminal, where the tools themselves ask for touch and PIN — BitFedot never sees a
+PIN or your disk password. Every step but the last only *adds* the keys next to the password.
+
+| Step | What happens |
+|---|---|
+| 1 · Prepare | Installs the tools (optional — every later step installs what it is missing). |
+| 2 · The two keys | Optional factory reset, FIDO2 PIN, OpenPGP PINs, touch required for signing. Repeating the step keeps PINs that are already set. |
+| 3 · Signing key | An OpenPGP key for signing releases and git tags: the same key on both YubiKeys (created in memory, copied to both, shredded) or a separate one generated on each. |
+| 4 · Disk encryption | Both keys are enrolled on every encrypted volume. At boot the graphical screen asks for the PIN **once** and the key blinks for **one** touch — also when the system spans several encrypted volumes. The boot image carries drivers for any keyboard and display. |
+| 5 · Login and sudo | Login, `sudo` and administrator dialogs accept the key (PIN + touch), from a root-owned key list. |
+| 6 · Keyring | The desktop keyring opens by itself after a key login: its password becomes a long random one, stored as an encrypted systemd credential on the disk only your keys unlock. |
+| 7 · Remove the password | Wipes the password from the disk and locks the login password. Only offered once **both** keys have unlocked the disk at a real boot and worked for `sudo`, and the keyring step is done. |
+
+What keeps it safe:
+
+- **Proof before removal.** The last step stays disabled until each key has demonstrably worked.
+- **A paper recovery key is optional.** Without it there is no text password of any kind — the
+  app says in red, and makes you type, that losing both keys means losing the data forever.
+- **It survives updates.** The needed packages are protected from removal, every newly installed
+  kernel's boot image is checked for hardware-key support (and rebuilt if it lacks it), and a
+  small guard restores hardware-key login if an update switches it off.
+- **Old kernels stay bootable** with the password until you remove it.
+
+![Hardware keys](docs/hardware-keys.png)
+
+Status: every step has been run for real on one computer (Fedora 45, two YubiKey 5C NFC, system
+on two encrypted volumes). Other hardware and layouts are unproven — read each script before you
+run it. Full guide, including what to do when something goes wrong:
+[docs/HARDWARE-KEYS.md](docs/HARDWARE-KEYS.md).
+
 ## What has been tested
 
 On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
@@ -267,16 +302,20 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
   `nft` in an unprivileged network namespace);
 - the explorer client and UI against the live Mempool REST API;
 - the sync-time model against the first hours of a real sync log;
+- the hardware-key setup, every step including the keyring and removing the password, on one
+  computer (Fedora 45, two YubiKey 5C NFC, system on two encrypted volumes);
+- a signed release (v0.2.0) built with the key on a YubiKey, downloaded back from GitHub and
+  accepted by the app's own updater;
 - the self-updater with a throw-away signing key: signed release installed and rolled back;
   unsigned, tampered, mislabelled and older releases refused;
-- 73 offline unit tests.
+- 84 offline unit tests.
 
 **Not yet verified end to end:** the post-sync hand-over on a fully synced chain; Fulcrum's
 initial indexing; updates across real version bumps; everything that needs root on a live system
 (RPM-based app installs, firewall zone, kill switch, Fedora updates — development had no root);
-self-update against a real GitHub release (none exists yet);
-the disk-encryption, login and password-removal stages of the hardware-key setup (the key
-preparation and signing-key stages have been run on two real YubiKeys);
+an actual self-update from one published release to the next;
+the hardware-key setup on anything other than the one computer it was run on end to end
+(two YubiKey 5C NFC, system on two encrypted volumes);
 the optional apps actually *launching*; the sync estimate over a complete sync; the tray icon
 under the GNOME extension and KDE. Reports are very welcome.
 
@@ -304,7 +343,7 @@ BITFEDOT_EXPLORER_API=https://mempool.space \
 | [`bitfedot/selfupdate.py`](bitfedot/selfupdate.py), [`pins.py`](bitfedot/pins.py) | signed self-update; vouched-for image digests |
 | [`bitfedot/hardening.py`](bitfedot/hardening.py) | check-up, firewall, kill switch, Fedora updates |
 | [`bitfedot/eta.py`](bitfedot/eta.py) | sync time model |
-| [`bitfedot/hardware_keys.py`](bitfedot/hardware_keys.py) | staged YubiKey setup (script generation, gates) |
+| [`bitfedot/hardware_keys.py`](bitfedot/hardware_keys.py), [`ykpins.py`](bitfedot/ykpins.py), [`keyring_unlock.py`](bitfedot/keyring_unlock.py) | staged YubiKey setup (script generation, gates) and its two terminal helpers |
 | [`bitfedot/explorer.py`](bitfedot/explorer.py) | Mempool REST client |
 | [`bitfedot/node.py`](bitfedot/node.py), [`agent.py`](bitfedot/agent.py) | status snapshot, actions, background agent |
 | [`bitfedot/ui/`](bitfedot/ui) | one module per page; no business logic |
@@ -328,7 +367,7 @@ runs as root unless the user asked, UI code stays free of logic. See [CONTRIBUTI
 To **Satoshi Nakamoto**, first — the [whitepaper](bitfedot/data/docs/bitcoin.pdf) ships with the
 app and can be saved from its About page. And to every project BitFedot installs, runs or is built
 on: Bitcoin Core, Fulcrum, Mempool, Tor, Sparrow, Mullvad, Obscura, LibreWolf, Element, SimpleX,
-Fedora, GNOME, systemd, Podman, GnuPG, curl and more. The full list is in [THANKS.md](THANKS.md).
+Fedora, GNOME, systemd, Podman, GnuPG, curl, Yubico's tools, oo7, dracut and more. The full list is in [THANKS.md](THANKS.md).
 
 ## Author and license
 

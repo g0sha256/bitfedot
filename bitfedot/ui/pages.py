@@ -98,6 +98,12 @@ class SettingsPage(Gtk.Box):
         g.add(self.tray_row)
         page.add(g)
 
+        g = Adw.PreferencesGroup(title="Notifications")
+        self._switch(g, "status_notifications", "Announce progress",
+                     "Desktop notifications for sync milestones, Fulcrum's index, the explorer becoming "
+                     "ready, and a service that stopped unexpectedly.")
+        page.add(g)
+
         g = Adw.PreferencesGroup(title="Updates")
         self._switch(g, "auto_check_updates", "Check for updates daily",
                      "You are notified; nothing is ever installed without your confirmation.")

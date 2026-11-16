@@ -1,6 +1,8 @@
 """Headless companion (systemd user service). Keeps the node moving when the
 window is closed:
 
+  * announces progress as desktop notifications: sync milestones, Fulcrum's
+    index, the explorer becoming ready, a service that stopped;
   * records sync progress once a minute, so the remaining-time estimate is
     meaningful the moment the window opens;
   * when the initial sync finishes, switches to the full-service profile and
@@ -42,6 +44,13 @@ def tick(state: dict):
         system.notify("Blockchain synced",
                       "Your node is fully validated. Starting Tor, Fulcrum and Mempool.")
         return
+
+    if s["status_notifications"]:
+        events, seen = node.status_events(node.snapshot(), s["notified"])
+        if seen != s["notified"]:
+            settings.update(notified=seen)
+        for title, body in events:
+            system.notify(title, body)
 
     # Follow the VPN: any change in its addresses changes torrc / whether Tor may run.
     if s["tor_route"] == "vpn" and s["tor_enabled"]:

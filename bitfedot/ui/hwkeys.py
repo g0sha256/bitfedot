@@ -22,8 +22,8 @@ class HardwareKeysPage(Gtk.Box):
         self.demo = demo
         self.facts = None
         self.loading = False
-        banner = Adw.Banner(revealed=True, title="Experimental: steps 1–3 are proven on real keys; the disk, login and "
-                                                 "password steps are not yet. Read every script before running it.")
+        banner = Adw.Banner(revealed=True, title="Experimental: run end to end on one computer so far (Fedora 45, two "
+                                                 "YubiKey 5C NFC). Read every script before running it.")
         self.append(banner)
         page = Adw.PreferencesPage(
             vexpand=True,
@@ -107,7 +107,18 @@ class HardwareKeysPage(Gtk.Box):
         page.add(g)
 
         g = Adw.PreferencesGroup(
-            title="6 · Remove the password",
+            title="6 · Keyring",
+            description="Saved Wi-Fi and app passwords live in the desktop keyring, which is opened by the "
+                        "login password you type. After a key login nothing is typed, so the keyring is "
+                        "switched to open by itself: its password becomes a long random one, stored "
+                        "encrypted for your user on this installation — on the disk only your keys unlock.")
+        self._stage(g, "keyring", "Open the keyring automatically",
+                    "Asks for your login password once. Verified step by step; your old password is put "
+                    "back if anything fails.", lambda: hk.keyring_script())
+        page.add(g)
+
+        g = Adw.PreferencesGroup(
+            title="7 · Remove the password",
             description="Irreversible. Available only when both keys have unlocked the disk at boot and "
                         "have been confirmed for sudo.")
         self.recovery = Adw.SwitchRow(
@@ -207,6 +218,8 @@ class HardwareKeysPage(Gtk.Box):
             f"Confirmed for: {', '.join(hw['boot_ok']) or 'no key yet'} · this boot "
             + ("was unlocked with a key" if facts["fido2_boot"] else "shows no key unlock in the journal"))
         self.rows["login"][0].set_subtitle("Registered ✓" if facts["pam_u2f"] else "")
+        if hw.get("keyring"):
+            self.rows["keyring"][0].set_subtitle("Done ✓ — the keyring opens by itself after login")
         self.rows["login"][1].set_sensitive(have_keys)
         self.login_row.set_subtitle(f"Confirmed for: {', '.join(hw['login_ok']) or 'no key yet'}")
         ok, missing = hk.ready_to_finalize(hw)

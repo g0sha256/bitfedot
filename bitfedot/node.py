@@ -1,6 +1,7 @@
 """Live status of the node (one snapshot dict consumed by the UI and tray)
 and the user-facing actions."""
 import collections
+import re
 import shutil
 import time
 from pathlib import Path
@@ -102,6 +103,13 @@ def _tor(s, state):
     return t
 
 
+def fulcrum_progress(log_line: str):
+    """Fulcrum reports its initial indexing as '… Processed height: 412000, 43.2%, …'.
+    -> (height, fraction) or None."""
+    m = re.search(r"Processed height:\s*(\d+),\s*([\d.]+)%", log_line or "")
+    return (int(m.group(1)), min(float(m.group(2)) / 100, 1.0)) if m else None
+
+
 def _fulcrum(s, state, bitcoin):
     f = {"state": "stopped", "message": "Stopped", "version": s["versions"].get("fulcrum", ""),
          "onion": services.onion_hostname("fulcrum") if s["onion_fulcrum"] else ""}
@@ -116,12 +124,24 @@ def _fulcrum(s, state, bitcoin):
             f.update(state="running", height=h, message=f"Serving wallets · height {h:,}")
         else:
             last = system.journal_last(U_FULCRUM)
-            last = last.split("> ", 1)[-1] if "> " in last else last
-            f.update(state="syncing", message=(last[:90] or "Indexing…"))
+            prog = fulcrum_progress(last)
+            if prog:
+                tip = bitcoin.get("blocks")
+                f.update(state="syncing", progress=prog[1], pill=f"Indexing {prog[1] * 100:.0f}%",
+                         message=f"Building the wallet index: {prog[1] * 100:.1f}% · block {prog[0]:,}"
+                                 + (f" of {tip:,}" if tip else ""))
+            else:
+                txi = bitcoin.get("txindex") or {}
+                if bitcoin.get("state") == "synced" and txi and not txi.get("synced", True):
+                    msg = "Waiting for Bitcoin Core to finish its transaction index"
+                else:
+                    last = last.split("> ", 1)[-1] if "> " in last else last
+                    msg = last[:90] or "Starting the index…"
+                f.update(state="syncing", pill="Indexing", message=msg)
     return f
 
 
-def _mempool(s, state):
+def _mempool(s, state, bitcoin=None, fulcrum=None):
     m = {"state": "stopped", "message": "Stopped", "version": s["versions"].get("mempool", ""),
          "onion": services.onion_hostname("mempool") if s["onion_mempool"] else ""}
     if s["phase"] != "ready":
@@ -129,10 +149,21 @@ def _mempool(s, state):
     elif state == "failed":
         m.update(state="error", message="Failed — see Logs")
     elif state in ("active", "activating"):
-        if rpc.http_ok(paths.MEMPOOL_PORT, "/api/v1/backend-info"):
-            m.update(state="running", message=f"http://127.0.0.1:{paths.MEMPOOL_PORT}")
+        tip = rpc.http_text(paths.MEMPOOL_PORT, "/api/blocks/tip/height")
+        node_tip = (bitcoin or {}).get("blocks")
+        if tip and tip.strip().isdigit():
+            height = int(tip)
+            if node_tip and height < node_tip - 1:
+                m.update(state="syncing", pill="Catching up", height=height,
+                         message=f"Explorer catching up: block {height:,} of {node_tip:,}")
+            else:
+                m.update(state="running", height=height, message=f"Explorer ready · block {height:,}")
+        elif rpc.http_ok(paths.MEMPOOL_PORT, "/api/v1/backend-info"):
+            m.update(state="starting", pill="Loading", message="Explorer is loading blocks and the mempool…")
+        elif (fulcrum or {}).get("state") != "running":
+            m.update(state="starting", pill="Waiting", message="Waiting for Fulcrum to finish its index")
         else:
-            m.update(state="starting", message="Starting (waits for Fulcrum)…")
+            m.update(state="starting", message="Starting…")
     return m
 
 
@@ -147,7 +178,7 @@ def snapshot() -> dict:
     snap["bitcoin"] = _bitcoin(s, units[U_BITCOIND])
     snap["tor"] = _tor(s, units[U_TOR])
     snap["fulcrum"] = _fulcrum(s, units[U_FULCRUM], snap["bitcoin"])
-    snap["mempool"] = _mempool(s, units[U_MEMPOOL])
+    snap["mempool"] = _mempool(s, units[U_MEMPOOL], snap["bitcoin"], snap["fulcrum"])
     try:
         snap["disk_free_gb"] = shutil.disk_usage(s["data_dir"]).free / 1e9
     except OSError:
@@ -186,6 +217,68 @@ def demo_snapshot(synced=False) -> dict:
                     "message": f"http://127.0.0.1:{paths.MEMPOOL_PORT}" if synced else "Starts after initial sync"},
         "units": {}, "activity": "", "disk_free_gb": 1890.0, "updates": {"fulcrum": "2.1.5"} if synced else {},
     }
+
+
+# ----------------------------------------------------------------- summary --
+NAMES = (("bitcoin", "Bitcoin Core"), ("tor", "Tor"), ("fulcrum", "Fulcrum"), ("mempool", "Mempool"))
+
+
+def summary(snap) -> list:
+    """One short status line per service, for the tray menu and notifications."""
+    if not snap.get("installed"):
+        return ["Not installed"]
+    b = snap["bitcoin"]
+    if "blocks" in b:
+        first = (f"Bitcoin Core: synced · block {b['blocks']:,}" if b["state"] == "synced" else
+                 f"Bitcoin Core: syncing {b['progress'] * 100:.1f}% · block {b['blocks']:,}")
+    else:
+        first = f"Bitcoin Core: {b['message']}"
+    lines = [first]
+    for key, name in NAMES[1:]:
+        info = snap[key]
+        text = info["message"] if info["state"] not in ("running",) or key != "tor" else "connected"
+        if key == "fulcrum" and info["state"] == "running":
+            text = "serving wallets"
+        if key == "mempool" and info["state"] == "running":
+            text = "explorer ready"
+        lines.append(f"{name}: {text[:1].lower() + text[1:] if text else info['state']}")
+    return lines
+
+
+def status_events(snap, seen: dict):
+    """Things worth a desktop notification since the last look.
+    `seen` is what was already announced; -> ([(title, body)], new_seen).
+    Pure: the agent keeps `seen` in the settings file so nothing is announced twice."""
+    events, seen = [], dict(seen or {})
+    if not snap.get("installed") or snap["settings"].get("all_stopped"):
+        return events, seen
+    b, f, m = snap["bitcoin"], snap["fulcrum"], snap["mempool"]
+
+    if b["state"] == "syncing" and "progress" in b:
+        step = int(b["progress"] * 10) * 10                       # 10, 20, … 90
+        if step >= 10 and step > seen.get("sync", 0):
+            seen["sync"] = step
+            eta_s = b.get("eta")
+            left = f" · about {eta_s / 3600:.0f} h left" if eta_s and eta_s > 5400 else ""
+            events.append((f"Blockchain sync {step}%", f"Block {b['blocks']:,} of {b['headers']:,}{left}"))
+
+    if f["state"] == "syncing" and f.get("progress") is not None:
+        step = int(f["progress"] * 4) * 25                         # 25, 50, 75
+        if step >= 25 and step > seen.get("fulcrum_index", 0):
+            seen["fulcrum_index"] = step
+            events.append((f"Fulcrum index {step}%", "Wallets can connect when it reaches 100%."))
+    if f["state"] == "running" and not seen.get("fulcrum_ready"):
+        seen["fulcrum_ready"] = True
+        events.append(("Fulcrum is ready", f"Your wallets can connect to 127.0.0.1:{paths.FULCRUM_PORT}."))
+    if m["state"] == "running" and not seen.get("mempool_ready"):
+        seen["mempool_ready"] = True
+        events.append(("Mempool explorer is ready", "Open the Explorer page in BitFedot."))
+
+    failed = sorted(name for key, name in NAMES if snap[key]["state"] == "error")
+    if failed and failed != seen.get("failed"):
+        events.append(("A service stopped unexpectedly", ", ".join(failed) + " — see Logs in BitFedot."))
+    seen["failed"] = failed
+    return events, seen
 
 
 # ----------------------------------------------------------------- actions --

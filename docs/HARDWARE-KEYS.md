@@ -1,18 +1,17 @@
 # Hardware keys (YubiKey) — experimental
 
-> **Status: partly proven.** Stages 1–3 (tools, both keys' PINs, the signing key copied onto
-> both keys) have been run for real on Fedora 45 with two YubiKey 5C NFC (firmware 5.7.4), and
-> the fixes from those runs are in. Stages 4–6 — disk encryption, login, removing the password —
-> have **not** been run yet: they are written from the documentation of `systemd-cryptenroll`,
-> `pam_u2f`, `dracut` and `authselect` and checked only for shell syntax, input validation and
-> ordering. Read each script (*Show script*) before running it, and do the first run of those
-> stages on a machine you can afford to reinstall.
+> **Status: proven on one computer.** Every stage — tools, both keys' PINs, the signing key, disk
+> encryption with boots from each key, login and sudo, the keyring, and removing the password —
+> has been run for real on Fedora 45 with two YubiKey 5C NFC (firmware 5.7.4), on a system spread
+> over two encrypted volumes, and the fixes from those runs are in. One machine is not many: other hardware, other disk
+> layouts and other desktops are unproven. Read each script (*Show script*) before running it.
 
 The **Hardware keys** page moves four things onto two YubiKeys — a main key and a backup:
 
 | What | How | Tool |
 |---|---|---|
 | Disk encryption (LUKS) | FIDO2 `hmac-secret`, PIN + touch at boot | `systemd-cryptenroll` |
+| Desktop keyring | opens by itself from a credential stored on that disk | `systemd-creds`, oo7 |
 | Login, sudo, administrator dialogs | FIDO2 with PIN | `pam_u2f` through `authselect` |
 | Release and git signing | OpenPGP key on the card, touch per signature | `gpg`, `ykman` |
 | BitFedot's own updates | the public half of that key in `bitfedot/keys/bitfedot/` | `selfupdate.py` |
@@ -55,7 +54,7 @@ Nothing leaves the computer: no key server, no cloud, no network access in any s
   both asked at the same moment. Now: the graphical boot screen stays on, the volumes unlock one
   after another so the PIN is typed once and reused, and additional volumes are enrolled
   PIN-only so only the first needs a touch. *Tidy the boot prompt* applies this to a system
-  enrolled with the earlier version. (This polish itself still awaits its first real boot.)
+  enrolled with the earlier version.
 - **Secrets are wiped on every way out** — error, Ctrl+C, or closing the window — and leftovers
   from an interrupted run are shredded at the start of the next one.
 
@@ -84,7 +83,15 @@ Nothing leaves the computer: no key server, no cloud, no network access in any s
    (`/etc/u2f_mappings`, so a program running as you cannot add its own key), with a fixed origin
    (renaming the computer cannot break login) and PIN verification, and enables Fedora's
    `with-pam-u2f` feature. Test `sudo -k && sudo true` with each key and confirm.
-6. **Remove the password** — optional paper recovery key (off by default), then `systemd-cryptenroll
+6. **Keyring** — the desktop keyring (saved Wi-Fi and app passwords) is normally opened by the
+   login password you type. After a key login nothing is typed, so the desktop would ask for that
+   password every time. This step gives the keyring a long random password and stores it as an
+   encrypted systemd credential that Fedora's keyring daemon (oo7) loads by itself:
+   **YubiKey → encrypted disk → this installation's credential key → keyring.** Every part of the
+   switch is verified, and the old password is put back if any part fails. Cost: after a
+   reinstall of the system the saved passwords in the keyring have to be entered again.
+   Undo: `python3 -P bitfedot/keyring_unlock.py undo`. Needs systemd 258+ and oo7 (Fedora 45).
+7. **Remove the password** — optional paper recovery key (off by default), then `systemd-cryptenroll
    --wipe-slot=password` on every volume and `passwd -l` for your user: boot, login, sudo and
    polkit dialogs then accept only a key.
 

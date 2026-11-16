@@ -1,8 +1,8 @@
 """Hardware keys: move disk encryption, login and release signing onto two YubiKeys.
 
-  !! EXPERIMENTAL — key preparation and the signing key have been run on real
-  !! YubiKeys (Fedora 45); the disk, login and finalize stages have not yet.
-  !! Read each script before you run it.
+  !! EXPERIMENTAL — every stage has been run for real, but on one computer only
+  !! (Fedora 45, two YubiKey 5C NFC, system on two LUKS volumes). Other hardware
+  !! and layouts are unproven. Read each script before you run it.
 
 This is the one feature of BitFedot that can lock you out of your own computer,
 so it is built differently from everything else:
@@ -358,6 +358,9 @@ def ready_to_finalize(hw: dict):
         return False, ["Two different keys must be set up first."]
     if not hw.get("disk"):
         missing.append("The keys are not enrolled for disk encryption yet.")
+    if not hw.get("keyring"):
+        missing.append("The keyring still needs your login password (step 6). Without that step the "
+                       "desktop would keep asking for a password you no longer type.")
     for role, serial in zip(ROLES, keys):
         if serial not in hw["boot_ok"]:
             missing.append(f"The {role} key ({serial}) has not unlocked the disk at boot yet.")
@@ -436,7 +439,8 @@ mark "$serial" fido
 
 say "OpenPGP PINs (used for signing). Factory defaults: PIN 123456, Admin PIN 12345678"
 settle
-python3 {_q(paths.PKG_DIR / 'ykpins.py')} --state "$STATE/hwkey-$serial.done"
+# -P: do not let files next to the helper shadow Python modules the YubiKey library imports
+python3 -P {_q(paths.PKG_DIR / 'ykpins.py')} --state "$STATE/hwkey-$serial.done"
 
 echo "$serial" > "$STATE/hwkey-{role}.serial"
 say "The {role} key is ready (serial $serial)."
@@ -729,6 +733,24 @@ finish
 """
 
 
+def keyring_script() -> str:
+    """Let the desktop keyring open by itself after a hardware-key login
+    (see keyring_unlock.py for how and what it costs)."""
+    tool = _q(paths.PKG_DIR / "keyring_unlock.py")
+    return HEADER + f"""
+say "Keyring: open it automatically after you log in with a hardware key"
+echo "    Today it is opened by the login password you type. With a key there is nothing typed,"
+echo "    so the desktop would ask for that password after every login."
+echo "    This gives the keyring a long random password and stores it encrypted for your user on"
+echo "    this installation — which itself sits on the disk only your keys unlock."
+echo "    Note: after a reinstall of the system, saved Wi-Fi and app passwords must be entered again."
+pause
+python3 -P {tool} setup
+touch "$STATE/hwkey-keyring.done"
+finish
+"""
+
+
 def finalize_script(devices: list, user: str, recovery_key: bool) -> str:
     """The irreversible step: remove the password everywhere."""
     devs = [d["device"] for d in devices]
@@ -832,7 +854,7 @@ def adopt_serials() -> dict:
         if _SERIAL.match(serial):
             found[role] = serial
     # A step counts as done when its script reached the end — not when it was started.
-    for step, key in (("disk", "disk"), ("final", "final")):
+    for step, key in (("disk", "disk"), ("final", "final"), ("keyring", "keyring")):
         if (paths.CONFIG_DIR / f"hwkey-{step}.done").exists():
             found[key] = True
     return record(**found) if found else state()

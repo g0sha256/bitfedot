@@ -15,10 +15,10 @@ from unittest import mock
 
 os.environ["BITFEDOT_ROOT"] = tempfile.mkdtemp(prefix="bitfedot-test-")
 
-from bitfedot import (about, apps, eta, explorer, hardening, installer, migrate, net, paths,  # noqa: E402
-                      pins, selfupdate, services, settings, system, verify)
+from bitfedot import (about, apps, eta, explorer, hardening, installer, migrate, net, node,  # noqa: E402
+                      paths, pins, selfupdate, services, settings, system, verify)
 from bitfedot import hardware_keys as hk  # noqa: E402
-from bitfedot import ykpins  # noqa: E402
+from bitfedot import keyring_unlock, ykpins  # noqa: E402
 from bitfedot.catalog import CATALOG, CATEGORIES  # noqa: E402
 from bitfedot.paths import U_BITCOIND, U_FULCRUM, U_MEMPOOL, U_TOR  # noqa: E402
 
@@ -443,6 +443,7 @@ class HardwareKeys(unittest.TestCase):
             "disk-plain": hk.disk_script(self.DEVS, plain_boot=True),
             "boot": hk.boot_script(self.DEVS),
             "login": hk.login_script("fedora"),
+            "keyring": hk.keyring_script(),
             "finalize": hk.finalize_script(self.DEVS, "fedora", recovery_key=True),
             "revert": hk.revert_script(self.DEVS, "fedora"),
         }
@@ -475,13 +476,16 @@ class HardwareKeys(unittest.TestCase):
         for mode in ("pgp-clone", "pgp-separate"):                 # gpgconf lists it even when it is missing
             self.assertIn('[ -x "$(gpgconf --list-dirs libexecdir)/scdaemon" ] || missing+=(gnupg2-scdaemon)', s[mode])
         for name, text in s.items():                               # every step installs its own tools
-            self.assertEqual("\nneed_tools\n" in text, name != "revert", name)
+            self.assertEqual("\nneed_tools\n" in text, name not in ("revert", "keyring"), name)
 
     def test_password_removal_is_gated_on_both_keys(self):
-        hw = {"main": "111111", "backup": "222222", "disk": True, "boot_ok": ["111111"], "login_ok": ["111111"]}
+        hw = {"main": "111111", "backup": "222222", "disk": True, "keyring": True,
+              "boot_ok": ["111111"], "login_ok": ["111111"]}
         ok, missing = hk.ready_to_finalize(hw)
         self.assertFalse(ok)
         self.assertEqual(len(missing), 2)                          # backup: boot and sudo unproven
+        self.assertFalse(hk.ready_to_finalize({**hw, "boot_ok": ["111111", "222222"],
+                                               "login_ok": ["111111", "222222"], "keyring": False})[0])
         hw.update(boot_ok=["111111", "222222"], login_ok=["111111", "222222"])
         self.assertEqual(hk.ready_to_finalize(hw), (True, []))
         self.assertFalse(hk.ready_to_finalize({**hw, "backup": "111111"})[0])     # same key twice
@@ -691,6 +695,142 @@ class YubiKeyPins(unittest.TestCase):
         self.assertIn("flock -n 9", script)                        # two steps at once fight over the key
         self.assertIn("HUP INT TERM", script)                      # closing the window still wipes secrets
         self.assertNotIn("Change it? [y/N]", script)               # a set FIDO2 PIN is simply kept
+
+
+class KeyringUnlock(unittest.TestCase):
+    """The keyring switch-over, against a fake daemon that behaves like oo7 does:
+    unlocking checks the password; changing the password of an open keyring does not."""
+
+    class Ring:
+        def __init__(self, password, take_changes=True):
+            self.password, self.is_locked, self.take_changes = password, False, take_changes
+
+        def locked(self):
+            return self.is_locked
+
+        def lock(self):
+            self.is_locked = True
+
+        def unlock(self, password):
+            if password != self.password:
+                raise OSError("Incorrect secret")
+            self.is_locked = False
+
+        def change_password(self, old, new):
+            if self.is_locked:
+                raise OSError("locked")
+            if self.take_changes:
+                self.password = new          # note: `old` is not checked, as in the real daemon
+
+    def run_setup(self, ring, typed, store_ok=True, opens_after_restart=True):
+        stored, log = {}, []
+
+        def store(pw):
+            if not store_ok:
+                raise RuntimeError("cannot encrypt")
+            stored["pw"] = pw
+
+        def restart():
+            ring.is_locked = not (opens_after_restart and stored.get("pw") == ring.password)
+            return ring
+        try:
+            keyring_unlock.setup(typed, say=log.append, ring=ring, store=store, restart=restart,
+                                 remove=lambda: stored.pop("pw", None))
+            return None, stored, log
+        except Exception as e:
+            return e, stored, log
+
+    def test_switches_over_and_verifies(self):
+        ring = self.Ring("login-pw")
+        err, stored, _ = self.run_setup(ring, "login-pw")
+        self.assertIsNone(err)
+        self.assertEqual(stored["pw"], ring.password)
+        self.assertNotEqual(ring.password, "login-pw")
+        self.assertGreater(len(ring.password), 40)
+        self.assertFalse(ring.locked())
+
+    def test_a_mistyped_password_changes_nothing(self):
+        ring = self.Ring("login-pw")
+        err, stored, _ = self.run_setup(ring, "typo")
+        self.assertIsInstance(err, keyring_unlock.WrongPassword)
+        self.assertEqual((ring.password, stored), ("login-pw", {}))
+
+    def test_failure_to_store_or_reopen_puts_the_old_password_back(self):
+        for kwargs in ({"store_ok": False}, {"opens_after_restart": False}):
+            ring = self.Ring("login-pw")
+            err, stored, log = self.run_setup(ring, "login-pw", **kwargs)
+            self.assertIsInstance(err, RuntimeError, kwargs)
+            self.assertEqual((ring.password, stored), ("login-pw", {}), kwargs)
+            self.assertFalse(ring.locked())
+            self.assertTrue(any("Restored" in line for line in log), kwargs)
+
+    def test_a_daemon_that_ignores_the_change_is_noticed(self):
+        ring = self.Ring("login-pw", take_changes=False)
+        err, stored, _ = self.run_setup(ring, "login-pw")
+        self.assertIsInstance(err, RuntimeError)
+        self.assertEqual((ring.password, stored), ("login-pw", {}))
+
+    def test_undo(self):
+        ring = self.Ring("random-secret")
+        removed = []
+        keyring_unlock.undo("my-new-pw", say=lambda m: None, ring=ring, read=lambda: "random-secret",
+                            remove=lambda: removed.append(True))
+        self.assertEqual((ring.password, removed, ring.locked()), ("my-new-pw", [True], False))
+
+    def test_helpers_are_run_without_the_script_folder_on_the_import_path(self):
+        """ykman imports a library called `keyring`; a file of ours must never shadow it."""
+        self.assertFalse((paths.PKG_DIR / "keyring.py").exists())
+        self.assertIn("python3 -P ", hk.key_script("main", False))
+        self.assertIn("python3 -P ", hk.keyring_script())
+
+
+class StatusUpdates(unittest.TestCase):
+    def snap(self, **over):
+        s = node.demo_snapshot(synced=True)
+        for key, changes in over.items():
+            s[key] = {**s[key], **changes}
+        return s
+
+    def test_fulcrum_log_line_is_parsed(self):
+        line = "[2026-11-16 18:01:02.123] <Controller> Processed height: 412000, 43.2%, 1234.5 blocks/sec"
+        height, fraction = node.fulcrum_progress(line)
+        self.assertEqual(height, 412000)
+        self.assertAlmostEqual(fraction, 0.432)
+        self.assertIsNone(node.fulcrum_progress("<Controller> Initializing header merkle cache"))
+        self.assertIsNone(node.fulcrum_progress(""))
+
+    def test_summary_has_a_line_per_service(self):
+        lines = node.summary(self.snap(fulcrum={"state": "syncing", "message": "Building the wallet index: 43.2%"}))
+        self.assertEqual([line.split(":")[0] for line in lines], ["Bitcoin Core", "Tor", "Fulcrum", "Mempool"])
+        self.assertIn("synced · block", lines[0])
+        self.assertIn("43.2%", lines[2])
+        self.assertEqual(lines[3], "Mempool: explorer ready")
+        self.assertEqual(node.summary({"installed": False}), ["Not installed"])
+
+    def test_sync_milestones_are_announced_once(self):
+        syncing = node.demo_snapshot(synced=False)              # 47 %
+        events, seen = node.status_events(syncing, {})
+        self.assertEqual([title for title, _ in events], ["Blockchain sync 40%"])
+        self.assertEqual(node.status_events(syncing, seen)[0], [])            # not again
+        syncing["bitcoin"]["progress"] = 0.52
+        self.assertEqual(node.status_events(syncing, seen)[0][0][0], "Blockchain sync 50%")
+
+    def test_services_becoming_ready_and_failing(self):
+        events, seen = node.status_events(self.snap(), {})
+        self.assertEqual({title for title, _ in events}, {"Fulcrum is ready", "Mempool explorer is ready"})
+        self.assertEqual(node.status_events(self.snap(), seen)[0], [])
+        broken = self.snap(fulcrum={"state": "error", "message": "Failed — see Logs"})
+        events, seen2 = node.status_events(broken, seen)
+        self.assertEqual(events[0][0], "A service stopped unexpectedly")
+        self.assertIn("Fulcrum", events[0][1])
+        self.assertEqual(node.status_events(broken, seen2)[0], [])            # one notice per failure
+        indexing = self.snap(fulcrum={"state": "syncing", "progress": 0.6}, mempool={"state": "starting"})
+        self.assertEqual(node.status_events(indexing, {})[0][0][0], "Fulcrum index 50%")
+
+    def test_nothing_is_announced_while_everything_is_stopped(self):
+        stopped = self.snap()
+        stopped["settings"] = {**stopped["settings"], "all_stopped": True}
+        self.assertEqual(node.status_events(stopped, {}), ([], {}))
 
 
 class About(unittest.TestCase):

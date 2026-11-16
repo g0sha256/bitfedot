@@ -58,6 +58,8 @@ DEFAULTS = {
     "background": True,          # closing the window keeps the app running
     "theme": "system",           # system | light | dark
     "updates_via_tor": True,
+    "status_notifications": True,   # desktop notifications for sync milestones and services
+    "notified": {},                 # what was already announced, see node.status_events()
     "auto_check_updates": True,
     "last_update_check": 0,
     "available": {},             # component -> latest upstream version seen
@@ -120,7 +122,7 @@ def update(**changes) -> dict:
     with _lock():
         data = _read()
         for k, v in changes.items():
-            if isinstance(v, dict) and isinstance(data.get(k), dict) and k != "os_updates":
+            if isinstance(v, dict) and isinstance(data.get(k), dict) and k not in ("os_updates", "notified"):
                 data[k] = {k2: v2 for k2, v2 in {**data[k], **v}.items() if v2 is not None}
             else:
                 data[k] = v

@@ -43,6 +43,7 @@ Backend (no GTK imports; unit-testable):
 | `hardening.py` | security check-up, firewall, kill switch, Fedora updates, `as_root()` | anything needing root |
 | `eta.py` | sync time estimate (pure functions + sample file) | tuning the estimate |
 | `hardware_keys.py` | YubiKey setup: generates staged shell scripts, tracks gates. **Experimental**; can lock users out — change with great care | anything about LUKS/PAM/YubiKey |
+| `keyring_unlock.py`, `ykpins.py` | stand-alone helpers the hardware-key scripts run in a terminal (keyring re-keying; YubiKey PINs). Must not import from the package, and must not be named like a library (`keyring`!) | those two steps |
 | `explorer.py` | Mempool REST client | explorer data |
 | `node.py` | `snapshot()` (status for the UI) and user actions | a new status field or action |
 | `agent.py` | headless loop: post-sync hand-over, VPN watch, daily checks | background behaviour |

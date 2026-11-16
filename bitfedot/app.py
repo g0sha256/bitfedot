@@ -146,9 +146,8 @@ class App(Adw.Application):
                           else f"Syncing {b['progress'] * 100:.1f}% · block {b['blocks']:,}")
             else:
                 status = b["message"]
-        items = [(1, status, None)]
-        if snap["installed"]:
-            items.append((2, f"Tor: {snap['tor']['message']}", None))
+        lines = node.summary(snap)
+        items = [(10 + i, line, None) for i, line in enumerate(lines)]
         items += [(3, "-", None), (4, "Open BitFedot", self.activate)]
         if snap["installed"] and snap["mempool"]["state"] == "running":
             items.append((5, "Open Mempool explorer", lambda: Gio.AppInfo.launch_default_for_uri(

@@ -27,7 +27,11 @@ the app's About page.
 | [SimpleX Chat](https://simplex.chat) | Messaging without identifiers |
 | [Fedora](https://fedoraproject.org) | The operating system this is built for |
 | [GNOME: GTK, libadwaita, PyGObject](https://www.gnome.org) | The entire user interface |
-| [systemd](https://systemd.io) | Runs and sandboxes every service |
+| [systemd](https://systemd.io) | Runs and sandboxes every service; unlocks the disk with a hardware key (cryptenroll) and keeps the keyring credential |
+| [Yubico: YubiKey Manager, libfido2, pam-u2f](https://developers.yubico.com) | Hardware-key setup, disk unlock, login and sudo with a key |
+| [oo7](https://github.com/linux-credentials/oo7) | The desktop keyring that opens by itself after a key login |
+| [dracut and Plymouth](https://github.com/dracut-ng/dracut-ng) | The boot image and the boot-time PIN prompt |
+| [authselect](https://github.com/authselect/authselect) | Fedora's way to switch on hardware-key login |
 | [Podman](https://podman.io) | Rootless containers for Mempool |
 | [MariaDB](https://mariadb.org) | Mempool's database |
 | [firewalld and nftables](https://firewalld.org) | Strict firewall zone and the VPN kill switch |

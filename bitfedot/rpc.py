@@ -96,6 +96,19 @@ def electrum_height(port=paths.FULCRUM_PORT, timeout=2):
         return None
 
 
+def http_text(port, path="/", timeout=2):
+    """Body of a local HTTP GET as text, or None if it did not answer with 200."""
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        body = resp.read().decode(errors="replace")
+        conn.close()
+        return body if resp.status == 200 else None
+    except OSError:
+        return None
+
+
 def http_ok(port, path="/", timeout=2) -> bool:
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)

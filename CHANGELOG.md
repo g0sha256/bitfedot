@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Status updates: Fulcrum's index progress and Mempool's catch-up in the app and tray, and
+  desktop notifications for sync milestones, services becoming ready, and failures.
+- Hardware keys: the desktop keyring opens by itself after a key login (encrypted systemd
+  credential for Fedora's oo7 keyring daemon), so no typed password is left anywhere.
+
 ## 0.2.0 — 2026-11-16
 
 First version intended for public release. The project was called *Nodestead* during early
@@ -24,7 +32,7 @@ development; an install made under that name is detected and adopted in place.
   before the switch, with rollback. `tools/release.sh` and `docs/RELEASING.md` for maintainers.
 - **Supply chain** controls: container images pinned and run by digest (`bitfedot/pins.py`), and
   a configurable number of required Bitcoin Core builder signatures.
-- **Hardware keys** (experimental, untested on hardware): staged YubiKey setup for LUKS, login,
+- **Hardware keys** (experimental): staged YubiKey setup for LUKS, login,
   sudo and release signing, with the password removed only after both keys are proven.
 - Hardware-key boot: graphical prompt, PIN asked once, one touch, also on systems whose disk
   spans several encrypted volumes.
