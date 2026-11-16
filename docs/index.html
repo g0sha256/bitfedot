@@ -103,6 +103,12 @@
 
   pre { background: #17171a; color: #ecebe8; padding: 18px 20px; border-radius: 14px; overflow-x: auto; margin: 18px 0 0; line-height: 1.55; }
   pre .c { color: #8d8a85; }
+  .code { position: relative; }
+  .code pre { padding-right: 92px; }
+  .copy { position: absolute; top: 12px; right: 12px; z-index: 1; cursor: pointer; font: inherit; font-size: .82rem; font-weight: 700;
+    padding: 6px 14px; border-radius: 999px; border: 1px solid #44444b; background: #2a2a2f; color: #ecebe8; }
+  .copy:hover { background: #36363c; }
+  .copy.done { background: var(--green); border-color: var(--green); color: #fff; }
   .gallery { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 28px; }
   figure { margin: 0; }
   figcaption { font-size: .9rem; color: var(--muted); margin-top: 8px; text-align: center; }
@@ -138,7 +144,7 @@
       Bitcoin Core, Fulcrum, Mempool and Tor — from one native app. No terminal. Every download is checked
       against its developers' signing keys before it runs.</p>
     <div class="cta">
-      <a class="btn primary" href="#install">Install in three commands</a>
+      <a class="btn primary" href="#install">Install on Fedora</a>
       <a class="btn" href="https://github.com/G0SHA256/bitfedot">View the source</a>
     </div>
     <div class="badges">
@@ -302,17 +308,49 @@
 
 <section id="install" class="soft">
   <div class="wrap">
-    <div class="eyebrow">Install</div>
-    <h2>Three commands, then a wizard.</h2>
-    <pre><span class="c"># already present on Fedora Workstation</span>
-sudo dnf install python3-gobject gobject-introspection gtk4 libadwaita curl gnupg2
+    <div class="eyebrow">Install on Fedora</div>
+    <h2>Four lines, then a wizard.</h2>
 
-git clone https://github.com/G0SHA256/bitfedot && cd bitfedot
-./install.sh          <span class="c"># per-user install into ~/.local — no root</span></pre>
-    <p style="margin-top:16px">Then open <strong>BitFedot</strong> from the app grid. Just curious? This changes nothing on your system:</p>
-    <pre>python3 -m bitfedot --demo synced</pre>
+    <div class="tablewrap">
+    <table>
+      <tr><th></th><th>Minimum</th><th>Recommended</th></tr>
+      <tr><td>Fedora</td><td>Fedora 41 Workstation</td><td>The current Fedora Workstation release — developed and tested on Fedora 45 (GNOME); KDE Plasma should work but is not tested yet</td></tr>
+      <tr><td>CPU</td><td>64-bit, x86_64 or aarch64, 2 cores</td><td>4 cores or more</td></tr>
+      <tr><td>RAM</td><td>8 GB</td><td>16 GB or more — half of it (up to 24 GB) becomes cache during the first sync</td></tr>
+      <tr><td>Storage</td><td>1.3 TB free</td><td>2 TB SSD or NVMe — the chain grows by roughly 100 GB a year</td></tr>
+      <tr><td>Internet</td><td>Any broadband</td><td>Unmetered — the first sync downloads about 900 GB</td></tr>
+    </table>
+    </div>
+    <p class="muted" style="margin-top:12px;font-size:.95rem">Bring Fedora up to date first:
+      <code>sudo dnf upgrade --refresh</code>, and reboot if a new kernel was installed.</p>
+
+    <h3 style="margin-top:30px">1 · Install</h3>
+    <div class="code">
+      <button class="copy" type="button" data-copy="install">Copy</button>
+<pre id="install">sudo dnf install -y git python3-gobject gobject-introspection gtk4 libadwaita curl gnupg2
+git clone https://github.com/G0SHA256/bitfedot
+cd bitfedot
+./install.sh</pre>
+    </div>
+    <p class="muted" style="font-size:.95rem;margin-top:10px">The first line installs what the app needs to start
+      (already present on a normal Fedora Workstation). <code>install.sh</code> puts BitFedot into
+      <code>~/.local</code> for your user only — no root, and nothing is started.</p>
+
+    <h3 style="margin-top:26px">2 · Open BitFedot from the app grid</h3>
+    <p class="muted" style="font-size:.95rem">Choose where the blockchain is stored and confirm. You enter your password
+      once, so Fedora's <code>tor</code> package can be installed. Downloads, signature checks, configuration and the
+      sync then run by themselves; you can close the window.</p>
+
+    <h3 style="margin-top:26px">Only curious?</h3>
+    <div class="code">
+      <button class="copy" type="button" data-copy="demo">Copy</button>
+<pre id="demo">git clone https://github.com/G0SHA256/bitfedot && cd bitfedot
+python3 -m bitfedot --demo synced</pre>
+    </div>
+    <p class="muted" style="font-size:.95rem;margin-top:10px">Demo mode shows the whole interface with sample data and changes nothing on your system.</p>
+
     <div class="grid">
-      <div class="card"><h3>What you need</h3><p>Fedora 41 or newer, x86_64 or aarch64, about 1.3 TB of free disk (SSD strongly recommended), 8 GB of RAM or more.</p></div>
+      <div class="card"><h3>Update or remove</h3><p><code>git pull &amp;&amp; ./install.sh</code> updates; <code>./install.sh --uninstall</code> removes the app. Your node data is never touched by either. <a href="https://github.com/G0SHA256/bitfedot#install-on-fedora">Full instructions.</a></p></div>
       <div class="card"><h3>Where it stands</h3><p>Version 0.2, pre-release. A real node runs on it and every part has been exercised against the real upstreams — but it is young. <a href="https://github.com/G0SHA256/bitfedot#what-has-been-tested">See exactly what has and has not been tested.</a></p></div>
       <div class="card"><h3>Help wanted</h3><p>Reports from real installs, testing on KDE and aarch64, more verified apps, translations. <a href="https://github.com/G0SHA256/bitfedot/blob/main/CONTRIBUTING.md">How to contribute.</a></p></div>
     </div>
@@ -329,10 +367,34 @@ git clone https://github.com/G0SHA256/bitfedot && cd bitfedot
     </div>
     <div style="max-width:34em">
       An independent project, not affiliated with or endorsed by the Fedora Project, Red Hat, or any project named here.
-      “Fedora” is a trademark of Red Hat, Inc. This page loads no scripts, fonts or trackers.
+      “Fedora” is a trademark of Red Hat, Inc. This page loads nothing from other sites: no fonts, no trackers, and its only script is the copy button.
     </div>
   </div>
 </footer>
 
+<script>
+  // Copy buttons for the command blocks. No network access, no dependencies.
+  document.querySelectorAll("button.copy").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var text = document.getElementById(button.dataset.copy).textContent.trim();
+      var done = function () {
+        button.textContent = "Copied";
+        button.classList.add("done");
+        setTimeout(function () { button.textContent = "Copy"; button.classList.remove("done"); }, 1800);
+      };
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(done);
+      } else {                      // file:// or old browsers
+        var area = document.createElement("textarea");
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+        done();
+      }
+    });
+  });
+</script>
 </body>
 </html>

@@ -64,25 +64,78 @@ every file it manages is generated from one settings file by one function.
 </tr>
 </table>
 
-## Quick start
+## Install on Fedora
+
+### What you need
+
+| | Minimum | Recommended |
+|---|---|---|
+| **Fedora** | Fedora 41 Workstation | **The current Fedora Workstation release** — BitFedot is developed and tested on Fedora 45 (GNOME). KDE Plasma should work but is not tested yet. |
+| **CPU** | 64-bit, x86_64 or aarch64, 2 cores | 4 cores or more (verification uses all of them) |
+| **RAM** | 8 GB | **16 GB or more.** Half of your RAM, up to 24 GB, is used as cache during the first sync, so more memory means a much faster sync. |
+| **Storage** | **1.3 TB free** | **2 TB SSD or NVMe.** The chain grows by roughly 100 GB a year. A spinning disk works but makes the first sync take several times longer. |
+| **Internet** | any broadband | unmetered — the first sync downloads about 900 GB |
+
+Where the 1.3 TB goes: Bitcoin Core's blocks and chain state ≈ 900 GB, its transaction index
+≈ 75 GB, Fulcrum's index ≈ 200 GB, Mempool's database and everything else ≈ 30 GB, plus headroom.
+The wizard checks your disk and memory before it installs anything and tells you if they fall short.
+
+Keep Fedora itself up to date first (`sudo dnf upgrade --refresh`, then reboot if a new kernel was
+installed). A supported, fully patched Fedora is part of the security model.
+
+### Install
+
+Copy the whole block into a terminal — on GitHub, the copy button is in the top-right corner of
+each block:
 
 ```sh
-sudo dnf install python3-gobject gobject-introspection gtk4 libadwaita curl gnupg2   # already on Fedora Workstation
+sudo dnf install -y git python3-gobject gobject-introspection gtk4 libadwaita curl gnupg2
+git clone https://github.com/G0SHA256/bitfedot
+cd bitfedot
+./install.sh
+```
+
+The first line installs what BitFedot needs to start (all of it is already present on a normal
+Fedora Workstation). `install.sh` puts the app into `~/.local` for your user only — it does not
+use root and does not start anything.
+
+Then open **BitFedot** from the app grid (or run `~/.local/bin/bitfedot`) and follow the wizard:
+choose where the blockchain is stored, confirm, and enter your password once so Fedora's `tor`
+package can be installed. Everything else — downloads, signature checks, configuration, starting
+the sync — happens by itself. You can close the window; the node keeps running.
+
+### Try it without installing anything
+
+```sh
 git clone https://github.com/G0SHA256/bitfedot && cd bitfedot
-./install.sh                     # per-user install into ~/.local — no root
+python3 -m bitfedot --demo synced
 ```
 
-Launch **BitFedot** from the app grid and follow the wizard.
+Demo mode shows the full interface with sample data and changes nothing on your system
+(`--demo syncing` and `--theme light` are also available).
 
-Just want to look around? This changes nothing on your system:
+### Update
 
 ```sh
-python3 -m bitfedot --demo synced        # or: --demo syncing   --theme light
+cd bitfedot && git pull && ./install.sh
 ```
 
-**Requirements:** Fedora 41 or newer (developed on 45), x86_64 or aarch64, about **1.3 TB** of
-free disk (SSD strongly recommended), 8 GB RAM or more. An RPM spec lives in
-[`packaging/`](packaging/bitfedot.spec).
+Then close BitFedot completely and open it again — choosing *Run in background* when quitting
+keeps the old version running. Your node, settings and data are untouched by an update. Once signed releases are
+published, the app also updates itself from the Updates page.
+
+### Uninstall
+
+In the app: **Settings → Remove services** stops the node and removes its background services
+(your blockchain data is kept). Then:
+
+```sh
+cd bitfedot && ./install.sh --uninstall
+```
+
+Delete `~/.local/share/bitfedot` and `~/.config/bitfedot` yourself if you also want the data gone.
+
+An RPM spec for packagers lives in [`packaging/`](packaging/bitfedot.spec).
 
 <details>
 <summary><b>Tray icon on GNOME</b></summary>
