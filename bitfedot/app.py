@@ -143,13 +143,13 @@ class App(Adw.Application):
             b = snap["bitcoin"]
             if "blocks" in b:
                 status = (f"Synced · block {b['blocks']:,}" if b["state"] == "synced"
-                          else f"Syncing {b['progress'] * 100:.1f}% · block {b['blocks']:,}")
+                          else f"Syncing {node.sync_percent(b['progress'])} · block {b['blocks']:,}")
             else:
                 status = b["message"]
         lines = node.summary(snap)
         items = [(10 + i, line, None) for i, line in enumerate(lines)]
         items += [(3, "-", None), (4, "Open BitFedot", self.activate)]
-        if snap["installed"] and snap["mempool"]["state"] == "running":
+        if snap["installed"] and node.explorer_available(snap):
             items.append((5, "Open Mempool explorer", lambda: Gio.AppInfo.launch_default_for_uri(
                 f"http://127.0.0.1:{paths.MEMPOOL_PORT}", None)))
         if snap["installed"] and snap["tor"]["state"] == "running" and not self.demo:

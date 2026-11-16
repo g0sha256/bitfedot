@@ -9,6 +9,7 @@ import time
 from gi.repository import Adw, Gtk
 
 from .. import explorer as api
+from .. import node
 from .widgets import copy_text, fmt_ago, fmt_bytes, icon_button, label, run_async, toast
 
 REFRESH_SECONDS = 30
@@ -63,13 +64,15 @@ class ExplorerPage(Gtk.Box):
 
     # ---------------------------------------------------------- navigation --
     def update(self, snap):
-        up = bool(snap.get("demo")) or snap["mempool"]["state"] == "running"
+        up = bool(snap.get("demo")) or node.explorer_available(snap)
         came_up = up and not self.backend_up
         self.backend_up = up
         on_home = not self.history or self.history[-1][0] == "home"
         if not self.get_mapped() or self.busy:
             return
-        if came_up or (up and on_home and time.time() - self.loaded_at > REFRESH_SECONDS):
+        # Only the home view reloads by itself: a block, transaction or address the user is
+        # reading is never replaced because the backend dropped out for a moment.
+        if up and on_home and (came_up or time.time() - self.loaded_at > REFRESH_SECONDS):
             self.open("home", push=not self.history)
 
     def refresh(self):               # called when the page is selected in the sidebar

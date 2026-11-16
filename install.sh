@@ -44,6 +44,15 @@ cp "$here/bitfedot/data/icons/hicolor/scalable/apps/$id.svg" "$icons/scalable/ap
 cp "$here/bitfedot/data/icons/hicolor/symbolic/apps/$id-symbolic.svg" "$icons/symbolic/apps/"
 gtk4-update-icon-cache -q -t "$icons" 2>/dev/null || true
 update-desktop-database -q "$apps" 2>/dev/null || true
+# The background agent keeps running across this (and across a logout): give it the new
+# code too. Restarting the agent stops or restarts no service; the lock makes this wait
+# for a reconfiguration the agent may be in the middle of.
+lock="${XDG_CONFIG_HOME:-$HOME/.config}/bitfedot/.apply.lock"
+if [[ -e "$lock" ]] && systemctl --user is-active --quiet bitfedot-agent.service 2>/dev/null; then
+    echo "Restarting the background agent with the new version…"
+    flock -w 900 "$lock" systemctl --user try-restart bitfedot-agent.service 2>/dev/null \
+        || echo "The background agent could not be restarted (busy?); it keeps the old version until the next restart of the computer."
+fi
 echo "Installed. Launch “BitFedot” from the app grid, or run: $bin"
 if [[ -f "$HOME/.config/nodestead/settings.json" ]]; then
     echo "An earlier Nodestead installation was found: BitFedot will offer to take it over on first start."

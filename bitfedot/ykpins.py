@@ -7,7 +7,8 @@ function — and ykman fails with "Card was reset" or INVALID_INSTRUCTION. Here
 all PINs are asked for first; each change then takes a fraction of a second on
 a fresh connection and is simply repeated if it gets interrupted.
 
-Run in a terminal:   python3 ykpins.py [--state FILE]
+Run in a terminal:   python3 -P ykpins.py [--state FILE]
+(-P: files next to this one must not shadow modules the YubiKey library imports.)
 With --state, PINs this tool already set on the key are kept unless you ask to
 change them again, so a repeated or interrupted setup does not make you choose
 new PINs twice.

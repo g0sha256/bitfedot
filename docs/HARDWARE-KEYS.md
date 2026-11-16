@@ -5,8 +5,17 @@
 > has been run for real on Fedora 45 with two YubiKey 5C NFC (firmware 5.7.4), on a system spread
 > over two encrypted volumes, and the fixes from those runs are in. One machine is not many: other hardware, other disk
 > layouts and other desktops are unproven. Read each script (*Show script*) before running it.
+>
+> **Not re-run since:** the keyring stage was reworked after that run — it now stores the new
+> password and reads it back before it re-keys the keyring, recognises a keyring that is already
+> switched over, and rolls back over a fresh connection. In this form its logic has been run
+> against the real keyring service on throw-away keyrings (`tools/keyring-rehearsal.py`), not yet
+> from start to finish on a login keyring. In the original run the stage checked itself by
+> restarting the keyring service; a fresh login after it had not been observed when this was
+> written. That machine also has no TPM chip, so a credential bound to a TPM has never been
+> exercised.
 
-The **Hardware keys** page moves four things onto two YubiKeys — a main key and a backup:
+The **Hardware keys** page moves five things onto two YubiKeys — a main key and a backup:
 
 | What | How | Tool |
 |---|---|---|
@@ -23,11 +32,15 @@ Nothing leaves the computer: no key server, no cloud, no network access in any s
 
 1. **Visible scripts.** Each stage is a shell script run in a terminal window. The tools ask for
    touch, PIN and re-plugging themselves; BitFedot never sees a PIN or the disk password.
-2. **Additive until the end.** Stages 1–5 only *add* the keys next to your password.
+2. **Additive until the end.** Stages 1–5 only *add* the keys next to your password. Stage 6
+   (the keyring) is the one exception before the last: it replaces the keyring's password, with
+   the costs listed there, and can be undone.
 3. **Old kernels stay bootable.** The boot image is rebuilt for the running kernel only; the other
    entries in the boot menu keep their old image and still accept the password.
 4. **Proof before removal.** *Remove the password* stays disabled until each key has (a) unlocked
-   the disk at a real boot — checked in the system journal — and (b) been confirmed for `sudo`.
+   the disk at a real boot — checked in the system journal — and (b) been confirmed for `sudo`,
+   and until the keyring opens by itself (stage 6; on a desktop whose keyring cannot do that the
+   stage is skipped, and the page says what that means).
 5. **Typed confirmations** in the final script, and an optional **paper recovery key**.
    Without it there is no text password of any kind: **if both keys are lost or broken, the data
    is lost forever.** The page says so in red and the script makes you type that you accept it.
@@ -87,10 +100,30 @@ Nothing leaves the computer: no key server, no cloud, no network access in any s
    login password you type. After a key login nothing is typed, so the desktop would ask for that
    password every time. This step gives the keyring a long random password and stores it as an
    encrypted systemd credential that Fedora's keyring daemon (oo7) loads by itself:
-   **YubiKey → encrypted disk → this installation's credential key → keyring.** Every part of the
-   switch is verified, and the old password is put back if any part fails. Cost: after a
-   reinstall of the system the saved passwords in the keyring have to be entered again.
-   Undo: `python3 -P bitfedot/keyring_unlock.py undo`. Needs systemd 258+ and oo7 (Fedora 45).
+   **YubiKey → encrypted disk → this installation's credential key → keyring.** The new password
+   is stored, flushed to disk and read back *before* the keyring is given it, so the keyring's
+   password never exists only inside the running helper; every part of the switch is verified, and
+   the old password is put back if a part fails. The stage can be interrupted and run again: a
+   keyring that is already switched over is recognised and left alone. To see first how the
+   keyring service on your computer behaves, run `python3 -P tools/keyring-rehearsal.py` from a
+   source checkout: it goes through the switch, its repeat, its undo and its failure cases on
+   throw-away keyrings, and touches neither your login keyring nor a stored credential.
+   What it costs:
+   - **A login with a typed password no longer opens the keyring.** The keyring service then
+     tries the typed password and does not fall back to the stored one, so the desktop asks for
+     a keyring password nobody knows. Log in with a key, or undo the stage (the undo opens the
+     keyring from the stored password and then gives it the one you choose).
+   - **Reinstalling the system loses the saved passwords** — and so does, on a computer with a
+     TPM chip, clearing or replacing that chip (a firmware reset, a new mainboard, the disk moved
+     to another computer): systemd binds the credential to the TPM where there is one, and the
+     helper tells you when it did.
+   - **The saved passwords are then protected by the disk, not by your login password.** If
+     neither the system nor your home folder is on an encrypted volume, whoever holds the disk
+     can read them; the page warns and the script asks for a typed confirmation.
+
+   Undo: `python3 -P bitfedot/keyring_unlock.py undo` (from the folder BitFedot runs from — the
+   script prints the full path). Needs systemd 258+ and oo7 (Fedora 45 with GNOME); on a desktop
+   with another keyring service the stage is not offered and does not hold back stage 7.
 7. **Remove the password** — optional paper recovery key (off by default), then `systemd-cryptenroll
    --wipe-slot=password` on every volume and `passwd -l` for your user: boot, login, sudo and
    polkit dialogs then accept only a key.
@@ -159,4 +192,7 @@ Updates — install it by themselves. See [RELEASING.md](RELEASING.md).
 | `sudo` no longer works after stage 5 | In the terminal you kept open: `sudo authselect disable-feature with-pam-u2f && sudo authselect apply-changes` |
 | Password already removed, one key lost | Use the other key; enroll a replacement by repeating stages 2, 4 and 5 for it |
 | Password already removed, both keys lost | The recovery key at the boot prompt, if you made one. Otherwise the data cannot be recovered |
-| You want passwords back | `python3 -m bitfedot.hardware_keys revert > revert.sh`, read it, `bash revert.sh`; then `sudo systemd-cryptenroll --unlock-fido2-device=auto --password /dev/…` per volume. Only possible while a key still works |
+| The desktop asks for a keyring password after stage 6 | Do not guess: no password you know opens it. Most likely you logged in by typing your password — the keyring service does not use the stored one then. Run stage 6 again: it opens the keyring from the stored password and changes nothing else (it does the same after a login with a key, and tells you if the stored password no longer fits). To have a typed password open it again, undo stage 6 (`python3 -P bitfedot/keyring_unlock.py undo`) |
+| Stage 6 says the stored password cannot be decrypted | The system was reinstalled, or its TPM chip was cleared or replaced: the passwords saved in the keyring are lost (the cost named in stage 6). To start again with an empty keyring — not tested — move `~/.local/share/keyrings/v1/login.keyring` and `~/.config/credstore.encrypted/oo7.keyring-encryption-password` aside, log out and in, let the desktop create a new keyring when an app first saves a password, then run stage 6 again |
+| Stage 6 was interrupted | Run it again: it recognises a keyring that is already switched over and replaces what an unfinished run left behind |
+| You want passwords back | `python3 -m bitfedot.hardware_keys revert > revert.sh`, read it, `bash revert.sh`; then `sudo systemd-cryptenroll --unlock-fido2-device=auto --password /dev/…` per volume. Only possible while a key still works. The script also offers to give the keyring an ordinary password again — choose your login password |

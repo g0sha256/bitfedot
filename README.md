@@ -123,7 +123,9 @@ cd bitfedot && git pull && ./install.sh
 ```
 
 Then close BitFedot completely and open it again — choosing *Run in background* when quitting
-keeps the old version running. Your node, settings and data are untouched by an update. Once signed releases are
+keeps the old version running. `install.sh` restarts the background agent by itself, so that it
+runs the new version too (no service is stopped for that). Your node, settings and data are
+untouched by an update. Once signed releases are
 published, the app also updates itself from the Updates page.
 
 ### Uninstall
@@ -254,8 +256,10 @@ Found a vulnerability? Please follow [SECURITY.md](SECURITY.md).
 
 BitFedot can take a Fedora machine from "a password protects everything" to "only my two
 YubiKeys do", one visible step at a time. Each step is a plain shell script you can read first and
-that runs in a terminal, where the tools themselves ask for touch and PIN — BitFedot never sees a
-PIN or your disk password. Every step but the last only *adds* the keys next to the password.
+that runs in a terminal. PINs and passwords are typed there and go only to the key, the disk tool
+or the keyring service — the app itself never sees them. Steps 1–5 only *add* the keys next to the
+password; step 6 changes how the keyring is opened (see its row for what that costs), and only
+step 7 removes the password.
 
 | Step | What happens |
 |---|---|
@@ -264,8 +268,8 @@ PIN or your disk password. Every step but the last only *adds* the keys next to 
 | 3 · Signing key | An OpenPGP key for signing releases and git tags: the same key on both YubiKeys (created in memory, copied to both, shredded) or a separate one generated on each. |
 | 4 · Disk encryption | Both keys are enrolled on every encrypted volume. At boot the graphical screen asks for the PIN **once** and the key blinks for **one** touch — also when the system spans several encrypted volumes. The boot image carries drivers for any keyboard and display. |
 | 5 · Login and sudo | Login, `sudo` and administrator dialogs accept the key (PIN + touch), from a root-owned key list. |
-| 6 · Keyring | The desktop keyring opens by itself after a key login: its password becomes a long random one, stored as an encrypted systemd credential on the disk only your keys unlock. |
-| 7 · Remove the password | Wipes the password from the disk and locks the login password. Only offered once **both** keys have unlocked the disk at a real boot and worked for `sudo`, and the keyring step is done. |
+| 6 · Keyring | The desktop keyring opens by itself after a key login: its password becomes a long random one, stored as an encrypted systemd credential on the disk only your keys unlock. **What it costs:** a login with a *typed* password no longer opens the keyring (log in with a key, or undo the step); after a reinstall — or, on a computer with a TPM chip, after that chip is cleared or replaced — the saved passwords must be entered again; and without disk encryption the saved passwords are readable by whoever holds the disk (the script then asks you to confirm). Needs Fedora's oo7 keyring service; on other desktops the step is skipped. |
+| 7 · Remove the password | Wipes the password from the disk and locks the login password. Only offered once **both** keys have unlocked the disk at a real boot and worked for `sudo`, and the keyring step is done (where the desktop supports it). |
 
 What keeps it safe:
 
@@ -280,8 +284,12 @@ What keeps it safe:
 ![Hardware keys](docs/hardware-keys.png)
 
 Status: every step has been run for real on one computer (Fedora 45, two YubiKey 5C NFC, system
-on two encrypted volumes). Other hardware and layouts are unproven — read each script before you
-run it. Full guide, including what to do when something goes wrong:
+on two encrypted volumes, no TPM chip). Other hardware and layouts are unproven — read each script
+before you run it. The keyring step was reworked after that run (it now stores the new password
+and reads it back before it re-keys the keyring, and recognises a keyring that is already switched
+over). In that form its logic has been run against the real keyring service on throw-away keyrings
+(`tools/keyring-rehearsal.py`, which you can run yourself first), but not yet from start to finish
+on a login keyring. Full guide, including what to do when something goes wrong:
 [docs/HARDWARE-KEYS.md](docs/HARDWARE-KEYS.md).
 
 ## What has been tested
@@ -303,12 +311,13 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
 - the explorer client and UI against the live Mempool REST API;
 - the sync-time model against the first hours of a real sync log;
 - the hardware-key setup, every step including the keyring and removing the password, on one
-  computer (Fedora 45, two YubiKey 5C NFC, system on two encrypted volumes);
+  computer (Fedora 45, two YubiKey 5C NFC, system on two encrypted volumes) — the keyring step in
+  the form it had then, see below;
 - a signed release (v0.2.0) built with the key on a YubiKey, downloaded back from GitHub and
   accepted by the app's own updater;
 - the self-updater with a throw-away signing key: signed release installed and rolled back;
   unsigned, tampered, mislabelled and older releases refused;
-- 84 offline unit tests.
+- 110 offline unit tests.
 
 **Not yet verified end to end:** the post-sync hand-over on a fully synced chain; Fulcrum's
 initial indexing; updates across real version bumps; everything that needs root on a live system
@@ -316,6 +325,12 @@ initial indexing; updates across real version bumps; everything that needs root 
 an actual self-update from one published release to the next;
 the hardware-key setup on anything other than the one computer it was run on end to end
 (two YubiKey 5C NFC, system on two encrypted volumes);
+the reworked keyring step from start to finish on a login keyring (its logic has been run against
+the real keyring service on throw-away keyrings only); a fresh login after the keyring step (the
+step checks itself by restarting the keyring service, which is not quite the same); the keyring on
+a computer with a TPM chip; a login with a typed password after the keyring step (expected to
+leave the keyring shut — the keyring service prefers the typed password to the stored one);
+the notification for a service that keeps crashing, against real crashing units;
 the optional apps actually *launching*; the sync estimate over a complete sync; the tray icon
 under the GNOME extension and KDE. Reports are very welcome.
 
@@ -328,7 +343,7 @@ copy-paste recipes. Adding an optional app is **one data entry** in
 
 ```sh
 python3 -m bitfedot --demo synced                 # UI with sample data, no node needed
-python3 -m unittest discover tests                # offline tests, < 1 s
+python3 -m unittest discover tests                # offline tests, about a second
 BITFEDOT_ROOT=/tmp/bf python3 -m bitfedot         # everything in a sandbox dir; systemd untouched
 BITFEDOT_EXPLORER_API=https://mempool.space \
     python3 -m bitfedot --demo synced             # develop the explorer against a public API

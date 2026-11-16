@@ -13,7 +13,7 @@ Python standard library + PyGObject only. No build step: `python3 -m bitfedot`.
 ## Commands
 
 ```sh
-python3 -m unittest discover tests            # all tests; offline; < 1 s. Run after every change.
+python3 -m unittest discover tests            # all tests; offline; about a second. Run after every change.
 python3 -m bitfedot --demo synced             # full UI with sample data; changes nothing
 python3 -m bitfedot --demo syncing --theme light --page apps
 BITFEDOT_ROOT=/tmp/bf python3 -m bitfedot     # real code paths, all state under /tmp/bf, systemd never called
@@ -84,7 +84,8 @@ migration) · `widgets.py` (helpers: `run_async`, `toast`, formatting). `app.py`
 - Backend functions that can take long accept `report(message, fraction=None)`.
 - UI pages are classes with `title`, `icon`, `update(snap)` and optional `refresh()`
   (called when the page is selected). Demo mode: guard actions with `if self.demo`.
-- Settings keys are flat, documented inline in `settings.DEFAULTS`. Dict-valued keys merge.
+- Settings keys are flat, documented inline in `settings.DEFAULTS`. Dict-valued keys merge
+  (the two that are replaced whole instead are listed in `settings.REPLACED`).
 - Tests live in `tests/test_core.py`, grouped by area; they must stay offline and rootless.
 - Generated files carry `services.HEADER`; never hand-edit them in a running install.
 
@@ -99,6 +100,7 @@ migration) · `widgets.py` (helpers: `run_async`, `toast`, formatting). `app.py`
 | Add a service | unit + config renderer in `services.py`, add to `STOP_ORDER`/`DEPENDENTS` → §5 |
 | Change the sync estimate | constants at the top of `eta.py` → §6 |
 | Cut a release / pin a new Mempool version | `docs/RELEASING.md`, `tools/release.sh`, `pins.py` |
+| Check a change to the keyring stage for real | `python3 -P tools/keyring-rehearsal.py` — the real keyring service and `systemd-creds`, on throw-away keyrings; never the login keyring. The unit tests only know a fake service |
 
 ## Known gaps (good places to help)
 

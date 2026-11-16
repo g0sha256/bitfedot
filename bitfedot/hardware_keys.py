@@ -10,17 +10,21 @@ so it is built differently from everything else:
   * Every step is a plain shell script, shown to you and run in a terminal
     window where the tools ask their own questions (touch, PIN, re-plug). Nothing
     happens silently in the background, and secrets never pass through BitFedot.
-  * Every step except the last is *additive*: a key is added next to the
-    password, never instead of it.
+  * Every step up to and including login is *additive*: a key is added next to
+    the password, never instead of it.
+  * The keyring step is the one exception before the end: it replaces the
+    keyring's password by a stored random one (keyring_unlock.py says what that
+    costs, and its `undo` takes it back).
   * The last step — removing the password — is refused until BOTH keys have
-    unlocked the disk at a real boot and have been used for a real sudo.
+    unlocked the disk at a real boot and have been used for a real sudo, and
+    the keyring opens by itself (where this desktop can do that at all).
   * `revert_script()` can put login and boot settings back while a key still
     works. It is deliberately not a button: print it with
     `python3 -m bitfedot.hardware_keys revert` and run it yourself.
 
-Stages, in order (see STAGES):
+Stages, in order:
   prepare → key (main) → key (backup) → pgp → disk → [reboot once per key]
-  → login → finalize
+  → login → keyring → finalize
 
 This module only *generates* scripts and reads state. Pure functions; see
 tests/test_core.py::HardwareKeys.
@@ -31,9 +35,10 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
-from . import paths, settings, system
+from . import keyring_unlock, paths, settings, system
 from .system import run
 
 PACKAGES = ("yubikey-manager", "pam-u2f", "pamu2fcfg", "fido2-tools", "gnupg2-scdaemon")
@@ -218,6 +223,26 @@ def pgp_fingerprints() -> list:
         return []
 
 
+_keyring_facts = (0.0, {})
+
+
+def keyring_facts() -> dict:
+    """What the keyring step depends on; remembered for a minute, because the page polls.
+      keyring_supported / keyring_reason: can this desktop open the keyring from a stored
+          credential at all (keyring_unlock.supported())?
+      keyring_encrypted: is the credential — or the key it is encrypted with — on an
+          encrypted disk? If neither is, whoever holds the disk can read the keyring."""
+    global _keyring_facts
+    at, known = _keyring_facts
+    if not known or time.monotonic() - at > 60:
+        ok, reason = keyring_unlock.supported()
+        known = {"keyring_supported": ok, "keyring_reason": reason,
+                 "keyring_encrypted": (system.on_encrypted_volume(paths.CREDSTORE_DIR)
+                                       or system.on_encrypted_volume("/var/lib/systemd"))}
+        _keyring_facts = (time.monotonic(), known)
+    return dict(known)
+
+
 def facts() -> dict:
     """Everything about the system the stages depend on. Unprivileged, and safe
     to poll: it never opens a connection to a key."""
@@ -234,12 +259,14 @@ def facts() -> dict:
         "pam_u2f": "with-pam-u2f" in auth,
         "password_locked": len(pw) > 1 and pw[1].startswith("L"),
         "terminal": terminal_command() is not None,
+        **keyring_facts(),
     }
 
 
 def state(s=None) -> dict:
     """Progress recorded in settings: {'main': serial, 'backup': serial,
-    'boot_ok': [serials], 'login_ok': [serials], 'disk': bool, 'pgp': str, 'final': bool}"""
+    'boot_ok': [serials], 'login_ok': [serials], 'disk': bool, 'pgp': str, 'final': bool,
+    'keyring': bool}"""
     hw = dict((s or settings.load()).get("hwkeys") or {})
     hw.setdefault("boot_ok", [])
     hw.setdefault("login_ok", [])
@@ -349,16 +376,37 @@ def _protect_packages() -> str:
 
 
 # ------------------------------------------------------------------ gates --
-def ready_to_finalize(hw: dict):
+KEYRING_HINT = ("Asks for your login password once. Verified step by step; your old password is put "
+                "back if anything fails. Safe to run again.")
+
+
+def keyring_stage(hw: dict, f: dict):
+    """What the keyring step shows on the page: -> (subtitle, may it be run)."""
+    if not f.get("keyring_supported", True):
+        return ((f.get("keyring_reason") or "Not available on this desktop.") + " This step is skipped "
+                "here: after the password is removed, the desktop will still ask for your old login "
+                "password to open the keyring."), False
+    if hw.get("keyring"):
+        return "Done ✓ — the keyring opens by itself after a key login. Running it again changes nothing.", True
+    if not f.get("keyring_encrypted", True):
+        return ("Warning: this disk is not encrypted. With this step anyone who gets hold of the disk can "
+                "read your saved passwords without knowing your login password. The script asks you "
+                "to confirm that."), True
+    return KEYRING_HINT, True
+
+
+def ready_to_finalize(hw: dict, keyring_supported: bool = True):
     """-> (ok, [reasons it is not]). The password is only removed when both keys
-    are proven to work for the disk *and* for login."""
+    are proven to work for the disk *and* for login, and the keyring opens by itself —
+    unless this desktop's keyring cannot do that at all (`keyring_supported` False):
+    that must not block the step for good, the page says what it means instead."""
     missing = []
     keys = [hw.get(r) for r in ROLES]
     if not all(keys) or keys[0] == keys[1]:
         return False, ["Two different keys must be set up first."]
     if not hw.get("disk"):
         missing.append("The keys are not enrolled for disk encryption yet.")
-    if not hw.get("keyring"):
+    if keyring_supported and not hw.get("keyring"):
         missing.append("The keyring still needs your login password (step 6). Without that step the "
                        "desktop would keep asking for a password you no longer type.")
     for role, serial in zip(ROLES, keys):
@@ -733,18 +781,41 @@ finish
 """
 
 
-def keyring_script() -> str:
+def keyring_script(encrypted: bool = True) -> str:
     """Let the desktop keyring open by itself after a hardware-key login
-    (see keyring_unlock.py for how and what it costs)."""
+    (see keyring_unlock.py for how and what it costs).
+
+    `encrypted`: do the stored credential or its key sit on an encrypted disk
+    (facts()['keyring_encrypted'])? If not, the step would silently trade the login
+    password's protection of the saved passwords for none at all — so the script
+    says so and wants it typed."""
     tool = _q(paths.PKG_DIR / "keyring_unlock.py")
+    where = """
+echo "    This gives the keyring a long random password and stores it encrypted for your user on"
+echo "    this installation — which itself sits on the disk only your keys unlock."
+""" if encrypted else """
+printf '\\n\\033[1;31m==> THIS DISK IS NOT ENCRYPTED.\\033[0m\\n'
+echo "    This step gives the keyring a long random password and stores it on this disk. Today your"
+echo "    saved passwords are protected by your login password; afterwards anyone who gets hold of"
+echo "    this computer or its disk can read them without knowing any password."
+read -r -p "    Type exactly  NOT ENCRYPTED  to go on anyway: " accept
+[ "$accept" = "NOT ENCRYPTED" ] || { echo "Not confirmed."; false; }
+"""
     return HEADER + f"""
 say "Keyring: open it automatically after you log in with a hardware key"
 echo "    Today it is opened by the login password you type. With a key there is nothing typed,"
 echo "    so the desktop would ask for that password after every login."
-echo "    This gives the keyring a long random password and stores it encrypted for your user on"
-echo "    this installation — which itself sits on the disk only your keys unlock."
-echo "    Note: after a reinstall of the system, saved Wi-Fi and app passwords must be entered again."
+{where}
+echo "    What it costs:"
+echo "      - After a reinstall of the system — or, on a computer with a TPM chip, after that chip is"
+echo "        cleared or replaced — saved Wi-Fi and app passwords must be entered again."
+echo "      - A login at which you TYPE your password no longer opens the keyring: log in with a key,"
+echo "        or run this step again in that session — it opens the keyring and changes nothing."
+printf '    To take it back at any time:  python3 -P %s undo\\n' {tool}
 pause
+# "Done" must mean that THIS run reached its end — not an earlier one whose result was
+# taken back since. (The page also wants the stored credential to exist: keyring_done.)
+rm -f "$STATE/hwkey-keyring.done"
 python3 -P {tool} setup
 touch "$STATE/hwkey-keyring.done"
 finish
@@ -793,6 +864,20 @@ def revert_script(devices: list, user: str) -> str:
     readd = "".join(f"""
 echo "    To give {d} a password again:  sudo systemd-cryptenroll --unlock-fido2-device=auto --password {d}"
 """ for d in devs)
+    # Back on typed-password logins, the keyring would stay shut: the keyring service then
+    # tries the typed password and never the stored credential. So give it a password again.
+    tool = _q(paths.PKG_DIR / "keyring_unlock.py")
+    keyring = f"""
+if [ -e "${{XDG_CONFIG_HOME:-$HOME/.config}}/credstore.encrypted/{keyring_unlock.CREDENTIAL}" ]; then
+    say "Keyring: it opens from a stored credential, which a login with a typed password does not use"
+    echo "    Give it an ordinary password again. Choose your login password, so it opens when you log in."
+    if python3 -P {tool} undo; then
+        rm -f "$STATE/hwkey-keyring.done"
+    else
+        printf '    The keyring was left as it is. Later:  python3 -P %s undo\\n' {tool}
+    fi
+fi
+"""
     return HEADER + f"""
 say "Reverting BitFedot's hardware-key changes"
 sudo passwd -u {_q(user)} || true
@@ -810,7 +895,7 @@ sudo grubby --update-kernel=ALL --args="rhgb" || true
 [ -f /etc/kernel/cmdline ] && ! grep -qw rhgb /etc/kernel/cmdline && sudo sed -i -E 's/( quiet|$)/ rhgb\\1/' /etc/kernel/cmdline
 sudo dracut --force --kver "$(uname -r)"
 say "Login and boot are back to passwords. The keys remain enrolled on the disk (harmless)."
-{readd}
+{readd}{keyring}
 finish
 """
 
@@ -842,9 +927,17 @@ def run_in_terminal(script: str, name: str) -> Path:
     return path
 
 
+def keyring_done() -> bool:
+    """The keyring step counts as done while its script has reached the end AND the stored
+    credential is still there — `keyring_unlock.py undo` removes it, and with it this."""
+    return ((paths.CONFIG_DIR / "hwkey-keyring.done").exists()
+            and (paths.CREDSTORE_DIR / keyring_unlock.CREDENTIAL).exists())
+
+
 def adopt_serials() -> dict:
-    """Pick up what the scripts wrote down: key serial numbers and finished steps."""
-    found = {}
+    """Pick up what the scripts wrote down: key serial numbers and finished steps.
+    Writes the settings only when something changed (the page calls this while polling)."""
+    hw, found = state(), {}
     for role in ROLES:
         f = paths.CONFIG_DIR / f"hwkey-{role}.serial"
         try:
@@ -854,10 +947,12 @@ def adopt_serials() -> dict:
         if _SERIAL.match(serial):
             found[role] = serial
     # A step counts as done when its script reached the end — not when it was started.
-    for step, key in (("disk", "disk"), ("final", "final"), ("keyring", "keyring")):
+    for step in ("disk", "final"):
         if (paths.CONFIG_DIR / f"hwkey-{step}.done").exists():
-            found[key] = True
-    return record(**found) if found else state()
+            found[step] = True
+    found["keyring"] = keyring_done()               # the one step that can be taken back
+    changed = {k: v for k, v in found.items() if hw.get(k, False if k == "keyring" else None) != v}
+    return record(**changed) if changed else hw
 
 
 if __name__ == "__main__":

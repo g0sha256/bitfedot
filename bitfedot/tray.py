@@ -158,7 +158,10 @@ class Tray:
     def _click(self, item_id):
         for _id, _text, cb in self.items:
             if _id == item_id and cb:
-                GLib.idle_add(lambda: cb() and False)
+                # Bind now: the loop variable moves on before the main loop runs this,
+                # and every click would run the last item's action ("Quit…").
+                GLib.idle_add(lambda cb=cb: cb() and False)
+                break
 
     def _menu_call(self, _c, _s, _p, _i, method, params, inv):
         if method == "GetLayout":

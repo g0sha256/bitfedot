@@ -70,6 +70,7 @@ DEFAULTS = {
 }
 
 NET_MODES = ("clearnet", "dual", "tor_only", "tor_proxy")
+REPLACED = ("os_updates", "notified")      # dict-valued keys that update() replaces instead of merging
 
 
 @contextmanager
@@ -118,11 +119,13 @@ def load() -> dict:
 def update(**changes) -> dict:
     """Atomically merge `changes` into the stored settings and return the result.
     Dict values (versions, digests, secrets, available) are merged key-wise;
-    a value of None removes that key (e.g. versions={"sparrow": None})."""
+    a value of None removes that key (e.g. versions={"sparrow": None}).
+    Two dict-valued keys are records rather than maps and are replaced whole (REPLACED):
+    `os_updates`, the result of one check, and `notified`, see node.status_events()."""
     with _lock():
         data = _read()
         for k, v in changes.items():
-            if isinstance(v, dict) and isinstance(data.get(k), dict) and k not in ("os_updates", "notified"):
+            if isinstance(v, dict) and isinstance(data.get(k), dict) and k not in REPLACED:
                 data[k] = {k2: v2 for k2, v2 in {**data[k], **v}.items() if v2 is not None}
             else:
                 data[k] = v

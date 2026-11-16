@@ -45,6 +45,34 @@ def unit_states(units) -> dict:
             for i, u in enumerate(units)}
 
 
+def _parse_units(text: str, units) -> dict:
+    """Output of `systemctl show -p Id -p ActiveState -p SubState -p NRestarts u1 u2 …`
+    (one block per unit, separated by an empty line) -> what unit_info() returns."""
+    blocks = [dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+              for block in text.strip().split("\n\n") if block.strip()]
+    by_id = {b.get("Id"): b for b in blocks}
+    info = {}
+    for i, unit in enumerate(units):
+        b = by_id.get(unit) or (blocks[i] if len(blocks) == len(units) else {})
+        restarts = b.get("NRestarts", "")
+        info[unit] = {"state": b.get("ActiveState") or "inactive", "sub": b.get("SubState", ""),
+                      "restarts": int(restarts) if restarts.isascii() and restarts.isdigit() else 0}
+    return info
+
+
+def unit_info(units) -> dict:
+    """unit -> {'state': as in unit_states(), 'sub': systemd's finer state, 'restarts': how
+    often systemd restarted it by itself since it was last started — i.e. how often it
+    crashed}. A unit that crashed and waits for its automatic restart is 'activating' with
+    sub-state 'auto-restart': with Restart=on-failure it never rests in 'failed'."""
+    units = list(units)
+    if DRY_RUN:
+        return {u: {"state": "inactive", "sub": "dead", "restarts": 0} for u in units}
+    out = run(["systemctl", "--user", "show", "-p", "Id", "-p", "ActiveState", "-p", "SubState",
+               "-p", "NRestarts", *units], timeout=15).stdout
+    return _parse_units(out, units)
+
+
 def journal(unit: str, lines=200) -> str:
     return run(["journalctl", "--user", "-u", unit, "-n", str(lines), "-o", "short-iso",
                 "--no-pager", "--no-hostname"], timeout=15).stdout
@@ -103,6 +131,15 @@ def is_rotational(path) -> bool:
     except OSError:
         pass
     return False
+
+
+def on_encrypted_volume(path) -> bool:
+    """Does `path` (or the nearest folder that exists) sit on an encrypted (LUKS) volume?"""
+    src = run(["findmnt", "-no", "SOURCE", "-T", existing_parent(path)], timeout=10).stdout.strip()
+    src = src.split("[")[0]           # btrfs subvolume suffix
+    if not src:
+        return False
+    return "crypt" in run(["lsblk", "-sno", "TYPE", src], timeout=10).stdout.split()
 
 
 MIN_FEDORA = 45      # the release BitFedot is developed and tested on
@@ -189,9 +226,15 @@ def route_device(src: str, dst="1.1.1.1") -> str:
         return ""
 
 
-def notify(title: str, body: str = ""):
-    if have("notify-send") and not DRY_RUN:
-        run(["notify-send", "-a", paths.APP_NAME, "-i", paths.APP_ID, title, body], timeout=10)
+def notify(title: str, body: str = "") -> bool:
+    """Show a desktop notification. -> whether the desktop took it: with nobody logged in
+    (the node keeps running then) there is no notification service to take it."""
+    if DRY_RUN:
+        return True
+    if not have("notify-send"):
+        return False
+    return run(["notify-send", "-a", paths.APP_NAME, "-i", paths.APP_ID, title, body],
+               timeout=10).returncode == 0
 
 
 def default_route_device() -> str:

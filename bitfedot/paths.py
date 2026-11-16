@@ -14,6 +14,7 @@ _root = os.environ.get("BITFEDOT_ROOT")
 if _root:
     _r = Path(_root)
     CONFIG_DIR = _r / "config" / "bitfedot"
+    CREDSTORE_DIR = _r / "config" / "credstore.encrypted"
     DATA_DIR = _r / "share" / "bitfedot"
     UNIT_DIR = _r / "systemd-user"
     QUADLET_DIR = _r / "quadlet"
@@ -22,6 +23,7 @@ else:
     _cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     _data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
     CONFIG_DIR = _cfg / "bitfedot"
+    CREDSTORE_DIR = _cfg / "credstore.encrypted"      # systemd's encrypted credentials of this user
     DATA_DIR = _data / "bitfedot"
     UNIT_DIR = _cfg / "systemd/user"
     QUADLET_DIR = _cfg / "containers/systemd"

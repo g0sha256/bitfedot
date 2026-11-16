@@ -105,9 +105,10 @@ def _tor(s, state):
 
 def fulcrum_progress(log_line: str):
     """Fulcrum reports its initial indexing as '… Processed height: 412000, 43.2%, …'.
-    -> (height, fraction) or None."""
-    m = re.search(r"Processed height:\s*(\d+),\s*([\d.]+)%", log_line or "")
-    return (int(m.group(1)), min(float(m.group(2)) / 100, 1.0)) if m else None
+    -> (height, fraction) or None. Fulcrum rounds to one decimal, so its last lines read
+    '100.0%' while it is still working: the fraction stays below 1 until it serves."""
+    m = re.search(r"Processed height:\s*(\d+),\s*(\d+(?:\.\d+)?)%", log_line or "", re.ASCII)
+    return (int(m.group(1)), min(float(m.group(2)) / 100, 0.999)) if m else None
 
 
 def _fulcrum(s, state, bitcoin):
@@ -127,7 +128,7 @@ def _fulcrum(s, state, bitcoin):
             prog = fulcrum_progress(last)
             if prog:
                 tip = bitcoin.get("blocks")
-                f.update(state="syncing", progress=prog[1], pill=f"Indexing {prog[1] * 100:.0f}%",
+                f.update(state="syncing", progress=prog[1], pill=f"Indexing {int(prog[1] * 100)}%",
                          message=f"Building the wallet index: {prog[1] * 100:.1f}% · block {prog[0]:,}"
                                  + (f" of {tip:,}" if tip else ""))
             else:
@@ -149,22 +150,43 @@ def _mempool(s, state, bitcoin=None, fulcrum=None):
     elif state == "failed":
         m.update(state="error", message="Failed — see Logs")
     elif state in ("active", "activating"):
-        tip = rpc.http_text(paths.MEMPOOL_PORT, "/api/blocks/tip/height")
+        tip = (rpc.http_text(paths.MEMPOOL_PORT, "/api/blocks/tip/height") or "").strip()
         node_tip = (bitcoin or {}).get("blocks")
-        if tip and tip.strip().isdigit():
+        if tip.isascii() and tip.isdigit():
             height = int(tip)
             if node_tip and height < node_tip - 1:
                 m.update(state="syncing", pill="Catching up", height=height,
                          message=f"Explorer catching up: block {height:,} of {node_tip:,}")
+            elif (fulcrum or {}).get("state") != "running":
+                # Mempool follows Bitcoin Core by itself; only its address lookups go through
+                # Fulcrum. So it is up long before it is complete — say which part is missing.
+                m.update(state="running", pill="Partly ready", height=height,
+                         message=f"Blocks and transactions ready · block {height:,} — "
+                                 "address lookups wait for Fulcrum")
             else:
                 m.update(state="running", height=height, message=f"Explorer ready · block {height:,}")
         elif rpc.http_ok(paths.MEMPOOL_PORT, "/api/v1/backend-info"):
             m.update(state="starting", pill="Loading", message="Explorer is loading blocks and the mempool…")
-        elif (fulcrum or {}).get("state") != "running":
-            m.update(state="starting", pill="Waiting", message="Waiting for Fulcrum to finish its index")
         else:
             m.update(state="starting", message="Starting…")
     return m
+
+
+def _restarting(service: dict, unit: dict) -> dict:
+    """Add what systemd knows about crashes: how often it restarted the unit by itself and,
+    while the unit waits for the next attempt, that this is no ordinary start (systemd
+    reports a unit in auto-restart as 'activating', never as 'failed')."""
+    service["restarts"] = unit.get("restarts", 0)
+    if unit.get("sub") == "auto-restart":
+        service.update(state="starting", pill="Restarting",
+                       message="Stopped unexpectedly — restarting. See Logs.")
+    return service
+
+
+def explorer_available(snap) -> bool:
+    """Can the explorer be opened? It also answers while it is still catching up."""
+    m = snap.get("mempool") or {}
+    return m.get("state") == "running" or (m.get("state") == "syncing" and "height" in m)
 
 
 def snapshot() -> dict:
@@ -172,13 +194,15 @@ def snapshot() -> dict:
     snap = {"t": time.time(), "settings": s, "installed": s["installed"], "phase": s["phase"]}
     if not s["installed"]:
         return snap
-    units = system.unit_states([U_BITCOIND, U_TOR, U_FULCRUM, U_MEMPOOL])
+    info = system.unit_info([U_BITCOIND, U_TOR, U_FULCRUM, U_MEMPOOL])
+    units = {unit: i["state"] for unit, i in info.items()}
     snap["units"] = units
     snap["activity"] = services.activity()
-    snap["bitcoin"] = _bitcoin(s, units[U_BITCOIND])
-    snap["tor"] = _tor(s, units[U_TOR])
-    snap["fulcrum"] = _fulcrum(s, units[U_FULCRUM], snap["bitcoin"])
-    snap["mempool"] = _mempool(s, units[U_MEMPOOL], snap["bitcoin"], snap["fulcrum"])
+    snap["bitcoin"] = _restarting(_bitcoin(s, units[U_BITCOIND]), info[U_BITCOIND])
+    snap["tor"] = _restarting(_tor(s, units[U_TOR]), info[U_TOR])
+    snap["fulcrum"] = _restarting(_fulcrum(s, units[U_FULCRUM], snap["bitcoin"]), info[U_FULCRUM])
+    snap["mempool"] = _restarting(_mempool(s, units[U_MEMPOOL], snap["bitcoin"], snap["fulcrum"]),
+                                  info[U_MEMPOOL])
     try:
         snap["disk_free_gb"] = shutil.disk_usage(s["data_dir"]).free / 1e9
     except OSError:
@@ -214,33 +238,39 @@ def demo_snapshot(synced=False) -> dict:
                     "message": f"Serving wallets · height {tip:,}" if synced else "Starts after initial sync",
                     "onion": "fulcrumexampleonionaddressxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.onion" if synced else ""},
         "mempool": {"state": "running" if synced else "stopped", "version": "3.3.2", "onion": "",
-                    "message": f"http://127.0.0.1:{paths.MEMPOOL_PORT}" if synced else "Starts after initial sync"},
+                    **({"height": tip} if synced else {}),
+                    "message": f"Explorer ready · block {tip:,}" if synced else "Starts after initial sync"},
         "units": {}, "activity": "", "disk_free_gb": 1890.0, "updates": {"fulcrum": "2.1.5"} if synced else {},
     }
 
 
 # ----------------------------------------------------------------- summary --
 NAMES = (("bitcoin", "Bitcoin Core"), ("tor", "Tor"), ("fulcrum", "Fulcrum"), ("mempool", "Mempool"))
+READY = {"tor": "connected", "fulcrum": "serving wallets", "mempool": "explorer ready"}
+CRASH_NOTICE_EVERY = 3600       # seconds: a service that keeps crashing is announced once an hour at most
+
+
+def sync_percent(progress: float) -> str:
+    """Progress of a sync that is not finished: never shown as 100 %."""
+    return f"{min(progress * 100, 99.9):.1f}%"
 
 
 def summary(snap) -> list:
-    """One short status line per service, for the tray menu and notifications."""
+    """One short status line per service, for the tray menu."""
     if not snap.get("installed"):
         return ["Not installed"]
     b = snap["bitcoin"]
     if "blocks" in b:
         first = (f"Bitcoin Core: synced · block {b['blocks']:,}" if b["state"] == "synced" else
-                 f"Bitcoin Core: syncing {b['progress'] * 100:.1f}% · block {b['blocks']:,}")
+                 f"Bitcoin Core: syncing {sync_percent(b['progress'])} · block {b['blocks']:,}")
     else:
         first = f"Bitcoin Core: {b['message']}"
     lines = [first]
     for key, name in NAMES[1:]:
         info = snap[key]
-        text = info["message"] if info["state"] not in ("running",) or key != "tor" else "connected"
-        if key == "fulcrum" and info["state"] == "running":
-            text = "serving wallets"
-        if key == "mempool" and info["state"] == "running":
-            text = "explorer ready"
+        # Mempool answers before Fulcrum does; until then its own message says what is missing.
+        complete = info["state"] == "running" and not (key == "mempool" and snap["fulcrum"]["state"] != "running")
+        text = READY[key] if complete else info["message"]
         lines.append(f"{name}: {text[:1].lower() + text[1:] if text else info['state']}")
     return lines
 
@@ -254,30 +284,65 @@ def status_events(snap, seen: dict):
         return events, seen
     b, f, m = snap["bitcoin"], snap["fulcrum"], snap["mempool"]
 
-    if b["state"] == "syncing" and "progress" in b:
-        step = int(b["progress"] * 10) * 10                       # 10, 20, … 90
-        if step >= 10 and step > seen.get("sync", 0):
-            seen["sync"] = step
-            eta_s = b.get("eta")
-            left = f" · about {eta_s / 3600:.0f} h left" if eta_s and eta_s > 5400 else ""
-            events.append((f"Blockchain sync {step}%", f"Block {b['blocks']:,} of {b['headers']:,}{left}"))
+    # Sync milestones belong to the initial sync only: a synced node that is a few blocks
+    # behind after a restart is "syncing" at 99.99 % too, and that is not news.
+    if snap.get("phase") == "ibd":
+        for key in ("fulcrum_index", "fulcrum_ready", "mempool_ready"):
+            seen.pop(key, None)                                   # they start over after this sync
+        if b["state"] == "syncing" and "progress" in b:
+            step = int(b["progress"] * 10) * 10                   # 10, 20, … 90
+            if step + 10 < seen.get("sync", 0):
+                seen["sync"] = step                               # a new sync from far below: start over
+            elif step >= 10 and step > seen.get("sync", 0):
+                seen["sync"] = step
+                eta_s = b.get("eta")
+                left = f" · about {eta_s / 3600:.0f} h left" if eta_s and eta_s > 5400 else ""
+                events.append((f"Blockchain sync {step}%", f"Block {b['blocks']:,} of {b['headers']:,}{left}"))
 
     if f["state"] == "syncing" and f.get("progress") is not None:
-        step = int(f["progress"] * 4) * 25                         # 25, 50, 75
-        if step >= 25 and step > seen.get("fulcrum_index", 0):
+        step = min(int(f["progress"] * 4) * 25, 75)                # 25, 50, 75
+        if f["progress"] < 0.9 and seen.get("fulcrum_ready"):
+            seen.pop("fulcrum_ready")                              # the index is being built again
+            seen.pop("mempool_ready", None)
+        if step + 25 < seen.get("fulcrum_index", 0):
+            seen["fulcrum_index"] = step
+        elif step >= 25 and step > seen.get("fulcrum_index", 0):
             seen["fulcrum_index"] = step
             events.append((f"Fulcrum index {step}%", "Wallets can connect when it reaches 100%."))
     if f["state"] == "running" and not seen.get("fulcrum_ready"):
         seen["fulcrum_ready"] = True
         events.append(("Fulcrum is ready", f"Your wallets can connect to 127.0.0.1:{paths.FULCRUM_PORT}."))
-    if m["state"] == "running" and not seen.get("mempool_ready"):
+    # The explorer is complete only once Fulcrum serves its address lookups.
+    if m["state"] == "running" and f["state"] == "running" and not seen.get("mempool_ready"):
         seen["mempool_ready"] = True
         events.append(("Mempool explorer is ready", "Open the Explorer page in BitFedot."))
 
+    # "Stopped unexpectedly" has two faces. A unit systemd gave up on rests in 'failed'
+    # (state "error"). One that crashes and is restarted — the usual case with
+    # Restart=on-failure — never does: its restart counter is what tells. The counter
+    # outlives a deliberate stop (systemd clears it at the next start), so it only counts
+    # for a service that is meant to be running now.
     failed = sorted(name for key, name in NAMES if snap[key]["state"] == "error")
-    if failed and failed != seen.get("failed"):
-        events.append(("A service stopped unexpectedly", ", ".join(failed) + " — see Logs in BitFedot."))
+    stopped = [name for name in failed if name not in (seen.get("failed") or [])]
+    crashes, now = dict(seen.get("crashes") or {}), snap.get("t") or 0
+    for key, name in NAMES:
+        count = snap[key].get("restarts") or 0
+        last_count, last_notice = crashes.get(name, (0, 0))
+        wanted = snap[key]["state"] not in ("stopped", "blocked")
+        if (count > last_count and wanted and name not in stopped
+                and now - last_notice >= CRASH_NOTICE_EVERY):
+            stopped.append(name)
+        if name in stopped:
+            last_notice = now
+        if count or last_notice:
+            crashes[name] = [count, last_notice]
+        else:
+            crashes.pop(name, None)
+    if stopped:
+        events.append(("A service stopped unexpectedly", ", ".join(sorted(stopped)) + " — see Logs in BitFedot."))
     seen["failed"] = failed
+    if crashes or "crashes" in seen:
+        seen["crashes"] = crashes
     return events, seen
 
 

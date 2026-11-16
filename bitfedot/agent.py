@@ -33,6 +33,20 @@ def sync_complete(s) -> bool:
         and info["headers"] > 0
 
 
+def announce(s):
+    """Desktop notifications for what changed since the last look (node.status_events).
+
+    An event counts as announced only once the desktop has taken it: while nobody is
+    logged in there is no notification service, and the next tick simply tries again.
+    The very first look — a new install, or the first run of a version that has this —
+    only takes stock: what was already true then is not news."""
+    events, seen = node.status_events(node.snapshot(), s["notified"])
+    if not s["notified"]:
+        events = []
+    if all(system.notify(title, body) for title, body in events) and seen != s["notified"]:
+        settings.update(notified=seen)
+
+
 def tick(state: dict):
     s = settings.load()
     if not s["installed"]:
@@ -41,18 +55,14 @@ def tick(state: dict):
         return
     if s["phase"] == "ibd" and s["bitcoind_enabled"] and sync_complete(s):
         node.finalize_sync()
-        system.notify("Blockchain synced",
-                      "Your node is fully validated. Starting Tor, Fulcrum and Mempool.")
+        if s["status_notifications"]:
+            system.notify("Blockchain synced",
+                          "Your node is fully validated. Starting Tor, Fulcrum and Mempool.")
         return
 
-    if s["status_notifications"]:
-        events, seen = node.status_events(node.snapshot(), s["notified"])
-        if seen != s["notified"]:
-            settings.update(notified=seen)
-        for title, body in events:
-            system.notify(title, body)
-
     # Follow the VPN: any change in its addresses changes torrc / whether Tor may run.
+    # First, and before anything that can be slow or fail: it is the one duty here that
+    # must not wait.
     if s["tor_route"] == "vpn" and s["tor_enabled"]:
         addrs = system.vpn_addresses(s["vpn_iface"])
         if state.get("vpn") != addrs:
@@ -62,6 +72,12 @@ def tick(state: dict):
                               else f"VPN {s['vpn_iface']} is down — Tor stopped (no clearnet fallback).")
             state["vpn"] = addrs
             services.apply(s)
+
+    if s["status_notifications"]:
+        try:
+            announce(s)
+        except Exception as e:      # a nicety: it must never cost the update check below
+            print(f"agent: status: {type(e).__name__}: {e}", flush=True)
 
     if s["auto_check_updates"] and time.time() - s["last_update_check"] > DAY:
         installer.check_updates()

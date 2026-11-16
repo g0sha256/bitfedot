@@ -8,6 +8,34 @@
 - Hardware keys: the desktop keyring opens by itself after a key login (encrypted systemd
   credential for Fedora's oo7 keyring daemon), so no typed password is left anywhere.
 
+### Fixed (after a review of the two additions above, before any release)
+- Keyring step: the new password is stored, flushed to disk and read back before the keyring is
+  re-keyed — an interrupted run can no longer leave the keyring on a password that exists nowhere.
+  Running the step again recognises a keyring that is already switched over instead of locking it
+  (and opens one that a typed-password login left shut), and a failed run is rolled back over a
+  fresh connection.
+- Keyring step: says what it costs (a typed-password login no longer opens the keyring; a TPM chip
+  that is cleared or replaced loses the saved passwords, as a reinstall does), asks for a typed
+  confirmation when the disk is not encrypted, and is skipped — without blocking password
+  removal — on desktops whose keyring service cannot open from a stored credential. Its "done"
+  state follows the stored credential and the last run of the step, so `undo` and an unfinished
+  repeat are reflected; the revert script offers the undo. `undo` refuses, instead of guessing,
+  when the stored password does not open a keyring that is shut.
+- `tools/keyring-rehearsal.py` runs the keyring step's switch, repeat, undo and failure cases
+  against the real keyring service on throw-away keyrings, without touching the login keyring.
+- Notifications: a service that crashes and is restarted is announced (systemd never reports such
+  a unit as failed), at most once an hour and only while it is meant to run; a notification
+  nobody could see is kept for later; a
+  synced node that is a few blocks behind is no longer a "sync 90 %" milestone; Fulcrum's index
+  never shows 100 % before it serves; the explorer counts as ready only once Fulcrum serves; a new
+  sync or index is announced afresh; the first run only takes stock.
+- Agent: the VPN watch runs before the status check again and can no longer be skipped or delayed
+  by it; a garbled reply from a local service no longer aborts a status poll.
+- Explorer page: a short lag of Mempool behind Bitcoin Core no longer disables it or replaces the
+  page being read with the home view.
+- Tray menu: a click runs the item that was clicked (every click used to open "Quit…").
+- `install.sh` restarts the background agent, so an update reaches it without a reboot.
+
 ## 0.2.0 — 2026-11-16
 
 First version intended for public release. The project was called *Nodestead* during early

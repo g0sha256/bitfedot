@@ -29,7 +29,8 @@ class HardwareKeysPage(Gtk.Box):
             vexpand=True,
             description="Move disk encryption, login, administrator prompts and release signing onto two "
                         "YubiKeys — a main key and a backup. Every step runs as a visible script in a "
-                        "terminal, and every step but the last only adds the keys next to your password.")
+                        "terminal. Steps 1–5 only add the keys next to your password; step 6 changes how "
+                        "the keyring is opened, and only the last step removes the password.")
         self.append(page)
         self.rows = {}
         self.g_health = Adw.PreferencesGroup(title="Needs attention", visible=False)
@@ -111,16 +112,19 @@ class HardwareKeysPage(Gtk.Box):
             description="Saved Wi-Fi and app passwords live in the desktop keyring, which is opened by the "
                         "login password you type. After a key login nothing is typed, so the keyring is "
                         "switched to open by itself: its password becomes a long random one, stored "
-                        "encrypted for your user on this installation — on the disk only your keys unlock.")
-        self._stage(g, "keyring", "Open the keyring automatically",
-                    "Asks for your login password once. Verified step by step; your old password is put "
-                    "back if anything fails.", lambda: hk.keyring_script())
+                        "encrypted for your user on this installation — so it is as safe as the disk it "
+                        "sits on, the one your keys unlock. What it costs: from then on a login with a "
+                        "typed password no longer opens the keyring, and after a reinstall (or, with a "
+                        "TPM chip, after that chip is cleared or replaced) the saved passwords have to "
+                        "be entered again.")
+        self._stage(g, "keyring", "Open the keyring automatically", hk.KEYRING_HINT,
+                    lambda: hk.keyring_script(self.facts.get("keyring_encrypted", True)))
         page.add(g)
 
         g = Adw.PreferencesGroup(
             title="7 · Remove the password",
             description="Irreversible. Available only when both keys have unlocked the disk at boot and "
-                        "have been confirmed for sudo.")
+                        "have been confirmed for sudo, and the keyring opens by itself (step 6).")
         self.recovery = Adw.SwitchRow(
             title="Also create a paper recovery key (optional)", active=False,
             subtitle="A long code, shown once, to write down and store away. It is the only way in "
@@ -218,11 +222,12 @@ class HardwareKeysPage(Gtk.Box):
             f"Confirmed for: {', '.join(hw['boot_ok']) or 'no key yet'} · this boot "
             + ("was unlocked with a key" if facts["fido2_boot"] else "shows no key unlock in the journal"))
         self.rows["login"][0].set_subtitle("Registered ✓" if facts["pam_u2f"] else "")
-        if hw.get("keyring"):
-            self.rows["keyring"][0].set_subtitle("Done ✓ — the keyring opens by itself after login")
+        keyring_text, keyring_runs = hk.keyring_stage(hw, facts)
+        self.rows["keyring"][0].set_subtitle(keyring_text)
+        self.rows["keyring"][1].set_sensitive(keyring_runs)
         self.rows["login"][1].set_sensitive(have_keys)
         self.login_row.set_subtitle(f"Confirmed for: {', '.join(hw['login_ok']) or 'no key yet'}")
-        ok, missing = hk.ready_to_finalize(hw)
+        ok, missing = hk.ready_to_finalize(hw, facts.get("keyring_supported", True))
         self.rows["finalize"][1].set_sensitive(ok and not hw.get("final"))
         self.gate.set_visible(not ok)
         self.gate.set_subtitle("\n".join(missing))

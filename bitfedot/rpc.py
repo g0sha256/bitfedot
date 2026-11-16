@@ -28,6 +28,10 @@ class BitcoinRPC:
                          {"Authorization": "Basic " + auth, "Content-Type": "application/json"})
             resp = conn.getresponse()
             body = resp.read()
+        except http.client.HTTPException as e:
+            # A reply cut short or garbled (Bitcoin Core stopping mid-answer) is not an OSError,
+            # but for every caller it means the same: not answering right now.
+            raise OSError(f"Bitcoin Core RPC: {type(e).__name__}") from e
         finally:
             conn.close()
         try:
@@ -96,25 +100,28 @@ def electrum_height(port=paths.FULCRUM_PORT, timeout=2):
         return None
 
 
-def http_text(port, path="/", timeout=2):
-    """Body of a local HTTP GET as text, or None if it did not answer with 200."""
+def http_text(port, path="/", timeout=2, limit=4096):
+    """Body of a local HTTP GET as text (its first `limit` bytes), or None if it did not
+    answer with 200. Never raises: a garbled or truncated reply counts as no answer."""
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-        conn.request("GET", path)
-        resp = conn.getresponse()
-        body = resp.read().decode(errors="replace")
-        conn.close()
-        return body if resp.status == 200 else None
-    except OSError:
+        try:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            return resp.read(limit).decode(errors="replace") if resp.status == 200 else None
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException):
         return None
 
 
 def http_ok(port, path="/", timeout=2) -> bool:
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-        conn.request("GET", path)
-        ok = conn.getresponse().status == 200
-        conn.close()
-        return ok
-    except OSError:
+        try:
+            conn.request("GET", path)
+            return conn.getresponse().status == 200
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException):
         return False

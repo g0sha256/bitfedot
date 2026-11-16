@@ -265,11 +265,7 @@ def set_auto_updates(enable: bool):
 
 # ---------------------------------------------------------------- check-up --
 def _encrypted(path) -> bool:
-    src = run(["findmnt", "-no", "SOURCE", "-T", system.existing_parent(path)], timeout=10).stdout.strip()
-    src = src.split("[")[0]           # btrfs subvolume suffix
-    if not src:
-        return False
-    return "crypt" in run(["lsblk", "-sno", "TYPE", src], timeout=10).stdout.split()
+    return system.on_encrypted_volume(path)
 
 
 def _secure_boot():

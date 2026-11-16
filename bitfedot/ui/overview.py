@@ -249,7 +249,7 @@ class OverviewPage(Gtk.ScrolledWindow):
                                       else "Stop every service safely, in order")
         (self.all_btn.add_css_class if s["all_stopped"] else self.all_btn.remove_css_class)("suggested-action")
         self.all_btn.set_sensitive(not busy)
-        self.open_mempool.set_sensitive(snap["mempool"]["state"] == "running")
+        self.open_mempool.set_sensitive(node.explorer_available(snap))
         self.newnym.set_sensitive(snap["tor"]["state"] == "running")
 
     # ------------------------------------------------------------- actions --
