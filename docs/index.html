@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BitFedot — a private, hardened Bitcoin node for Fedora</title>
+<meta name="description" content="BitFedot turns a Fedora computer into a complete, verified, hardened Bitcoin node: Bitcoin Core, Fulcrum, Mempool and Tor in one native app. Public domain.">
+<meta property="og:title" content="BitFedot — a private, hardened Bitcoin node for Fedora">
+<meta property="og:description" content="Bitcoin Core, Fulcrum, Mempool and Tor in one native app. Every download verified against pinned developer keys. Public domain.">
+<meta property="og:image" content="https://g0sha256.github.io/bitfedot/overview.png">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<style>
+  :root {
+    --bg: #fbfaf8; --bg-soft: #f2efea; --card: #ffffff; --ink: #1b1a19; --muted: #625d57;
+    --line: #e3ded6; --orange: #e07b00; --orange-strong: #f7931a; --green: #1f8f5f;
+    --blue: #3c6eb4; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 28px rgba(0,0,0,.07);
+    --radius: 18px; --max: 1080px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --bg-soft: #1b1b1f; --card: #222226; --ink: #f1efec; --muted: #a9a49d;
+      --line: #313137; --orange: #f7931a; --green: #3fcf8e; --blue: #7aa8e8;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Cantarell, "Noto Sans", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--orange); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace; font-size: .88em; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 22px; }
+  section { padding: 72px 0; }
+  section.soft { background: var(--bg-soft); }
+  h1 { font-size: clamp(2.2rem, 5.2vw, 3.7rem); line-height: 1.08; letter-spacing: -.02em; margin: 0 0 18px; }
+  h2 { font-size: clamp(1.6rem, 3.2vw, 2.3rem); line-height: 1.15; letter-spacing: -.015em; margin: 0 0 12px; }
+  h3 { font-size: 1.08rem; margin: 0 0 6px; }
+  p { margin: 0 0 14px; }
+  .lede { font-size: 1.2rem; color: var(--muted); max-width: 44em; }
+  .eyebrow { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--orange); margin-bottom: 10px; }
+  .muted { color: var(--muted); }
+
+  header.top { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent); border-bottom: 1px solid var(--line); }
+  header.top .wrap { display: flex; align-items: center; gap: 22px; height: 58px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; color: var(--ink); }
+  .brand img { width: 28px; height: 28px; }
+  nav { margin-left: auto; display: flex; gap: 20px; font-size: .95rem; }
+  nav a { color: var(--muted); }
+  nav a:hover { color: var(--ink); text-decoration: none; }
+  @media (max-width: 760px) { nav a.opt { display: none; } }
+
+  .hero { padding: 76px 0 40px; text-align: center;
+    background: radial-gradient(900px 420px at 50% -80px, color-mix(in srgb, var(--orange-strong) 22%, transparent), transparent 70%); }
+  .hero .lede { margin: 0 auto 26px; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .btn { display: inline-block; padding: 12px 22px; border-radius: 999px; font-weight: 700; border: 1px solid var(--line);
+    color: var(--ink); background: var(--card); }
+  .btn.primary { background: var(--orange-strong); border-color: var(--orange-strong); color: #fff; }
+  .btn:hover { text-decoration: none; filter: brightness(1.05); }
+  .badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 18px 0 34px; }
+  .badge { font-size: .8rem; font-weight: 600; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--card); }
+  .shot { border-radius: 16px; box-shadow: var(--shadow); border: 1px solid var(--line); width: 100%; height: auto; display: block; }
+  .hero .shot { max-width: 940px; margin: 0 auto; }
+
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); margin-top: 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow); }
+  .card p { color: var(--muted); margin: 0; font-size: .97rem; }
+  .card .ico { font-size: 1.5rem; margin-bottom: 8px; }
+
+  .split { display: grid; gap: 38px; grid-template-columns: 1fr 1fr; align-items: center; }
+  @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+  ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 24px 0 0; }
+  ol.steps li { counter-increment: s; position: relative; padding: 0 0 20px 54px; }
+  ol.steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 36px; height: 36px; border-radius: 50%;
+    background: var(--orange-strong); color: #fff; font-weight: 800; display: grid; place-items: center; }
+  ol.steps li p { color: var(--muted); margin: 0; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 22px; background: var(--card); border-radius: var(--radius);
+    overflow: hidden; box-shadow: var(--shadow); font-size: .96rem; }
+  th, td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .78rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 700; white-space: nowrap; }
+  @media (max-width: 640px) { td:first-child { white-space: normal; } }
+  .tablewrap { overflow-x: auto; }
+
+  .callout { border-left: 4px solid var(--orange-strong); background: var(--card); padding: 18px 22px; border-radius: 0 var(--radius) var(--radius) 0;
+    box-shadow: var(--shadow); margin-top: 22px; }
+  .callout p:last-child { margin: 0; }
+  .facts { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); margin-top: 26px; }
+  .fact b { display: block; font-size: 2rem; line-height: 1.1; color: var(--orange); letter-spacing: -.02em; }
+  .fact span { color: var(--muted); font-size: .95rem; }
+  sup a { font-size: .75em; }
+  .sources { font-size: .86rem; color: var(--muted); margin-top: 26px; }
+  .sources li { margin-bottom: 4px; }
+
+  pre { background: #17171a; color: #ecebe8; padding: 18px 20px; border-radius: 14px; overflow-x: auto; margin: 18px 0 0; line-height: 1.55; }
+  pre .c { color: #8d8a85; }
+  .gallery { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 28px; }
+  figure { margin: 0; }
+  figcaption { font-size: .9rem; color: var(--muted); margin-top: 8px; text-align: center; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .pill { padding: 6px 13px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); font-size: .92rem; font-weight: 600; }
+  footer { padding: 44px 0 60px; border-top: 1px solid var(--line); color: var(--muted); font-size: .92rem; }
+  footer .cols { display: flex; gap: 30px; flex-wrap: wrap; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="icon.svg" alt="">BitFedot</a>
+    <nav>
+      <a class="opt" href="#why-fedora">Why Fedora</a>
+      <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#how">How it works</a>
+      <a class="opt" href="#verify">Verification</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/G0SHA256/bitfedot">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<div class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Don't trust. Verify.</div>
+    <h1>Your own Bitcoin node,<br>built for Fedora.</h1>
+    <p class="lede">BitFedot turns a Fedora computer into a complete, private, hardened Bitcoin stack —
+      Bitcoin Core, Fulcrum, Mempool and Tor — from one native app. No terminal. Every download is checked
+      against its developers' signing keys before it runs.</p>
+    <div class="cta">
+      <a class="btn primary" href="#install">Install in three commands</a>
+      <a class="btn" href="https://github.com/G0SHA256/bitfedot">View the source</a>
+    </div>
+    <div class="badges">
+      <span class="badge">Public domain</span>
+      <span class="badge">Fedora 41+</span>
+      <span class="badge">GTK 4 · libadwaita</span>
+      <span class="badge">Runs as your user, not root</span>
+      <span class="badge">No telemetry</span>
+    </div>
+    <img class="shot" src="overview.png" alt="BitFedot overview: a fully synced node with Bitcoin Core, Tor, Fulcrum and Mempool running" width="1080" height="760">
+  </div>
+</div>
+
+<section id="why-fedora" class="soft">
+  <div class="wrap">
+    <div class="eyebrow">Why Fedora, why now</div>
+    <h2>In 2026, machines started finding Linux bugs faster than people could patch them.</h2>
+    <p class="lede">AI-assisted research is turning up kernel vulnerabilities by the hundreds. For anyone who keeps
+      a node — or keys — on a computer, the question that matters is no longer <em>whether</em> a serious bug
+      exists, but <em>how quickly the fix reaches your machine</em>.</p>
+
+    <div class="facts">
+      <div class="fact"><b>948</b><span>Linux privilege-escalation bugs found by a single AI pipeline in one 30-hour run.<sup><a href="#src1">1</a></sup></span></div>
+      <div class="fact"><b>Day 0</b><span>When the “Copy Fail” kernel flaw went public, Fedora — with Arch and Amazon Linux — already had a patch out.<sup><a href="#src2">2</a></sup></span></div>
+      <div class="fact"><b>Before upstream</b><span>Fedora ships security-tagged kernel updates, at times before the fix is merged in the upstream release.<sup><a href="#src3">3</a></sup></span></div>
+    </div>
+
+    <div class="callout">
+      <p><strong>That is the platform BitFedot is tailored to.</strong> Not “Linux in general”: Fedora specifically —
+        its current kernels, SELinux enforcing out of the box, systemd's sandboxing, firewalld, rootless Podman
+        and dnf's signed packages. BitFedot uses each of them as it is meant to be used, and adds the piece Fedora
+        cannot provide by itself: keeping the system updated <em>from inside the same app that runs your node</em>,
+        with a safe shutdown before every restart.</p>
+    </div>
+
+    <ol class="sources">
+      <li id="src1">The Hacker News, <a href="https://thehackernews.com/2026/11/openai-ai-pipeline-generates-948-linux.html">“OpenAI AI Pipeline Generates 948 Linux Root Escalation Exploits in 30-Hour Run”</a>; Phoronix, <a href="https://www.phoronix.com/news/OpenAI-948-Linux-LPE-Bugs">“OpenAI Finds 948 Local Privilege Escalation Bugs In The Linux Kernel”</a>.</li>
+      <li id="src2">Wikipedia, <a href="https://en.wikipedia.org/wiki/Copy_Fail">“Copy Fail” (CVE-2026-31431)</a>: Arch Linux, Fedora and Amazon Linux “had released patches at the time of the disclosure”.</li>
+      <li id="src3">Fedora Magazine, <a href="https://fedoramagazine.org/how-fedora-is-responding-to-recent-kernel-vulnerabilities/">“How Fedora is Responding to Recent Kernel Vulnerabilities”</a> (May 2026), and its <a href="https://discussion.fedoraproject.org/t/how-fedora-is-responding-to-recent-kernel-vulnerabilities/191386">discussion thread</a>.</li>
+    </ol>
+    <p class="muted" style="font-size:.86rem">No distribution is first every time, and BitFedot does not claim Fedora always is. Patch speed varies by bug; check the trackers for the ones you care about.</p>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="eyebrow">What you get</div>
+    <h2>A full node stack that looks after itself.</h2>
+    <div class="grid">
+      <div class="card"><div class="ico">🔏</div><h3>Verified installs</h3><p>Latest stable Bitcoin Core (at least three independent builder signatures required), Fulcrum, Mempool and Tor. One password prompt in total.</p></div>
+      <div class="card"><div class="ico">⚡</div><h3>Fast sync, honest estimate</h3><p>Tuned to your RAM and disk. The time remaining is counted in transactions, not blocks, and allows for the slow final stretch.</p></div>
+      <div class="card"><div class="ico">🧅</div><h3>Tor, your way</h3><p>Clearnet, clearnet + Tor, Tor only, or everything through Tor — each explained. Tor can be bound to your VPN so it never falls back to clearnet.</p></div>
+      <div class="card"><div class="ico">🔎</div><h3>Your own explorer</h3><p>Fees, mempool, blocks, transactions and addresses in a native window, answered by your node. Nobody else sees what you look up.</p></div>
+      <div class="card"><div class="ico">🛡️</div><h3>Fedora hardening</h3><p>Security check-up, a sandbox around every service, a strict firewall zone, a system-wide VPN kill switch, private transaction broadcast.</p></div>
+      <div class="card"><div class="ico">🧰</div><h3>Verified companions</h3><p>Optional: Sparrow wired to your node, Mullvad and Obscura VPN, Tor Browser, Mullvad Browser, LibreWolf, Element, SimpleX.</p></div>
+      <div class="card"><div class="ico">🔄</div><h3>Updates for everything</h3><p>Node software, apps, Fedora itself and BitFedot — checked through Tor, verified, installed, restarted in the right order.</p></div>
+      <div class="card"><div class="ico">⏻</div><h3>Safe stops, always</h3><p>Services stop dependents-first and are given time to write to disk. Quit asks: run in background, or shut down safely.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="soft">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <div class="eyebrow">How it works</div>
+        <h2>From empty disk to private node.</h2>
+        <ol class="steps">
+          <li><h3>Pick a disk</h3><p>The wizard checks space, memory and disk type, and tunes the sync for the machine.</p></li>
+          <li><h3>Download, verify, install</h3><p>Releases come from their authors and must pass signature checks against keys pinned in BitFedot.</p></li>
+          <li><h3>Sync at full speed</h3><p>Clearnet, blocks only, a large cache, indexes deferred. Close the window if you like.</p></li>
+          <li><h3>Automatic hand-over</h3><p>When the chain is verified, a small agent switches to the full profile and starts Tor, Fulcrum and Mempool.</p></li>
+          <li><h3>Harden and connect</h3><p>Switch on the firewall zone and kill switch, add a wallet, and reach your node over an onion address.</p></li>
+        </ol>
+      </div>
+      <figure>
+        <img class="shot" src="syncing.png" alt="Initial sync with progress ring and remaining time" width="1080" height="733" loading="lazy">
+        <figcaption>Initial sync: progress measured in transactions</figcaption>
+      </figure>
+    </div>
+
+    <div class="grid">
+      <div class="card"><h3>Everything is a user service</h3><p>Plain systemd units you can inspect with <code>systemctl --user</code> and <code>journalctl</code>. Nothing of BitFedot's runs as root.</p></div>
+      <div class="card"><h3>One source of truth</h3><p>A single settings file; one function renders every config and unit from it and converges the system, idempotently.</p></div>
+      <div class="card"><h3>Loopback only</h3><p>Every service listens on 127.0.0.1. The one exception is Bitcoin's peer port, and only if you choose to accept clearnet peers.</p></div>
+      <div class="card"><h3>No keys in the node</h3><p>Bitcoin Core runs with its wallet disabled. Your keys live in your wallet — ideally on a hardware device.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="verify">
+  <div class="wrap">
+    <div class="eyebrow">Verification</div>
+    <h2>Nothing runs until it has been checked.</h2>
+    <p class="lede">Every signing key is pinned in the source code — nothing is trusted on first use. A failed check deletes the download and stops.</p>
+    <div class="tablewrap">
+    <table>
+      <tr><th>Software</th><th>What must be true before it is installed or updated</th></tr>
+      <tr><td>Bitcoin Core</td><td>Checksums signed by at least 3 independent builders (you can require up to 8); the download must match.</td></tr>
+      <tr><td>Fulcrum · Sparrow</td><td>Checksum file signed by the developer's pinned key; the download must match.</td></tr>
+      <tr><td>Tor Browser</td><td>Archive signed by the pinned Tor Browser Developers key.</td></tr>
+      <tr><td>Element</td><td>Element's signed package repository: release file, index and package hashes all verified.</td></tr>
+      <tr><td>Mullvad · Obscura · LibreWolf</td><td>The vendor's RPM repository, set up with a pinned copy of the vendor's key; dnf checks every package.</td></tr>
+      <tr><td>SimpleX</td><td>Flatpak from Flathub, added with Flathub's pinned repository key.</td></tr>
+      <tr><td>Mempool</td><td>Not signed upstream — so its images are pinned by content hash and run by that hash.</td></tr>
+      <tr><td>Tor · Fedora</td><td>Signed packages from the Fedora repositories.</td></tr>
+      <tr><td>BitFedot itself</td><td>Only from a release signed with the key the running copy already carries; tested before it is switched in; one-click rollback.</td></tr>
+    </table>
+    </div>
+    <div class="callout">
+      <p><strong>Why not compile everything locally?</strong> Because several independent signatures on one reproducible
+        build are stronger than a single build nobody can compare — and far more reliable.
+        <a href="https://github.com/G0SHA256/bitfedot#security-model">The reasoning is in the README.</a></p>
+    </div>
+  </div>
+</section>
+
+<section class="soft">
+  <div class="wrap">
+    <div class="eyebrow">A closer look</div>
+    <h2>Native, explained, and yours.</h2>
+    <div class="gallery">
+      <figure><img class="shot" src="explorer.png" alt="Built-in block explorer" loading="lazy" width="1080" height="760"><figcaption>Explorer on your own node</figcaption></figure>
+      <figure><img class="shot" src="security.png" alt="Security check-up and hardening switches" loading="lazy" width="1080" height="760"><figcaption>Security check-up and hardening</figcaption></figure>
+      <figure><img class="shot" src="connectivity.png" alt="Connectivity options with explanations" loading="lazy" width="1080" height="760"><figcaption>Every network choice explained</figcaption></figure>
+      <figure><img class="shot" src="apps.png" alt="Verified optional apps" loading="lazy" width="1080" height="760"><figcaption>Verified wallet, VPN, browser and messenger installs</figcaption></figure>
+      <figure><img class="shot" src="updates.png" alt="Updates for node software, apps, Fedora and BitFedot" loading="lazy" width="1080" height="760"><figcaption>One place for every update</figcaption></figure>
+      <figure><img class="shot" src="overview-light.png" alt="Light theme" loading="lazy" width="1080" height="760"><figcaption>Light, dark, or follow the system</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="open">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <div class="eyebrow">Open source</div>
+        <h2>Public domain. Read it, change it, ship it.</h2>
+        <p class="lede">BitFedot is released under The Unlicense: no permission, no attribution, no conditions.</p>
+        <p>About 6,500 lines of plain Python on GTK 4 — standard library and PyGObject only, nothing from PyPI.
+          The code is arranged so that a person or a coding assistant can pick it up quickly: one file maps the
+          modules and the rules, another has copy-paste recipes, and adding an app is a single data entry.</p>
+        <div class="pills">
+          <a class="pill" href="https://github.com/G0SHA256/bitfedot/blob/main/AGENTS.md">Code map</a>
+          <a class="pill" href="https://github.com/G0SHA256/bitfedot/blob/main/docs/EXTENDING.md">Recipes</a>
+          <a class="pill" href="https://github.com/G0SHA256/bitfedot/blob/main/docs/ARCHITECTURE.md">Architecture</a>
+          <a class="pill" href="https://github.com/G0SHA256/bitfedot/blob/main/SECURITY.md">Security policy</a>
+          <a class="pill" href="https://github.com/G0SHA256/bitfedot/blob/main/THANKS.md">Thanks</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Standing on shoulders</h3>
+        <p style="margin-bottom:12px">BitFedot arranges other people's work. First among them: <strong>Satoshi Nakamoto</strong> —
+          the whitepaper ships with the app and can be saved from its About page.</p>
+        <p>Bitcoin Core · Fulcrum · Mempool · Tor · Sparrow · Mullvad · Obscura · LibreWolf · Element · SimpleX ·
+          Fedora · GNOME · systemd · Podman · GnuPG · curl</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="soft">
+  <div class="wrap">
+    <div class="eyebrow">Install</div>
+    <h2>Three commands, then a wizard.</h2>
+    <pre><span class="c"># already present on Fedora Workstation</span>
+sudo dnf install python3-gobject gtk4 libadwaita curl gnupg2
+
+git clone https://github.com/G0SHA256/bitfedot && cd bitfedot
+./install.sh          <span class="c"># per-user install into ~/.local — no root</span></pre>
+    <p style="margin-top:16px">Then open <strong>BitFedot</strong> from the app grid. Just curious? This changes nothing on your system:</p>
+    <pre>python3 -m bitfedot --demo synced</pre>
+    <div class="grid">
+      <div class="card"><h3>What you need</h3><p>Fedora 41 or newer, x86_64 or aarch64, about 1.3 TB of free disk (SSD strongly recommended), 8 GB of RAM or more.</p></div>
+      <div class="card"><h3>Where it stands</h3><p>Version 0.2, pre-release. A real node runs on it and every part has been exercised against the real upstreams — but it is young. <a href="https://github.com/G0SHA256/bitfedot#what-has-been-tested">See exactly what has and has not been tested.</a></p></div>
+      <div class="card"><h3>Help wanted</h3><p>Reports from real installs, testing on KDE and aarch64, more verified apps, translations. <a href="https://github.com/G0SHA256/bitfedot/blob/main/CONTRIBUTING.md">How to contribute.</a></p></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap cols">
+    <div>
+      <strong style="color:var(--ink)">BitFedot</strong> — made by <a href="https://github.com/G0SHA256">G0SHA256</a>.<br>
+      Released into the public domain (<a href="https://github.com/G0SHA256/bitfedot/blob/main/LICENSE">The Unlicense</a>).
+    </div>
+    <div style="max-width:34em">
+      An independent project, not affiliated with or endorsed by the Fedora Project, Red Hat, or any project named here.
+      “Fedora” is a trademark of Red Hat, Inc. This page loads no scripts, fonts or trackers.
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

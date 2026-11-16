@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=BitFedot
+GenericName=Bitcoin Node
+Comment=Install and manage a private Bitcoin node: Bitcoin Core, Fulcrum, Mempool and Tor
+Exec=bitfedot
+Icon=io.github.g0sha256.BitFedot
+Terminal=false
+Categories=Network;P2P;Finance;GTK;
+Keywords=bitcoin;node;tor;electrum;mempool;fulcrum;
+StartupNotify=true

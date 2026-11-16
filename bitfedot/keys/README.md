@@ -1,0 +1,30 @@
+# Pinned release-signing keys
+
+These public keys are BitFedot's trust anchors: a download is only installed if
+it verifies against the keys in this directory (see `bitfedot/verify.py`).
+**Review them before you rely on this software**, and review any pull request
+that touches this directory with extra care.
+
+| Directory | Signer | Fingerprint | Obtained from |
+|---|---|---|---|
+| `bitcoin/` | Bitcoin Core Guix builders (3 valid signatures required) | one key per file | [`bitcoin-core/guix.sigs` → `builder-keys/`](https://github.com/bitcoin-core/guix.sigs/tree/main/builder-keys) |
+| `fulcrum/` | Calin Culianu | `D465 135F 97D0 047E 18E9 9DC3 2181 0A54 2031 C02C` | [`Electron-Cash/keys-n-hashes`](https://github.com/Electron-Cash/keys-n-hashes/blob/master/pubkeys/calinkey.txt) |
+| `sparrow/` | Craig Raw | `D4D0 D320 2FC0 6849 A257 B38D E946 1833 4C67 4B40` | <https://keybase.io/craigraw/pgp_keys.asc> |
+| `torbrowser/` | Tor Browser Developers | `EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290` | keys.openpgp.org (by fingerprint; the one documented by the Tor Project) |
+| `mullvad/` | Mullvad (code signing) | `A119 8702 FC3E 0A09 A9AE 5B75 D5A1 D4F2 66DE 8DDF` | <https://repository.mullvad.net/rpm/mullvad-keyring.asc> |
+| `obscura/` | Obscura Repository Signer (two keys) | `9520 95FF 9268 30EF E598 75B7 8789 08CE 4605 72A7`, `2A59 96C7 C12D 701E 78AD C7A2 7FFA 28C5 B0D8 256F` | <https://linux-pkgs.obscura.com/rpm/RPM-GPG-KEY-obscura> (identical to the key shipped in the `obscura-repository` package) |
+| `librewolf/` | LibreWolf Maintainers | `662E 3CDD 6FE3 2900 2D0C A5BB 4033 9DD8 2B12 EF16` | <https://repo.librewolf.net/pubkey.gpg> |
+| `element/` | riot.im packages (Element) | `12D4 CD60 0C22 40A9 F4A8 2071 D7B0 B669 41D0 1538` | <https://packages.element.io/debian/element-io-archive-keyring.gpg> |
+| `flathub/` | Flathub Repo Signing Key | `6E5C 05D9 79C7 6DAF 93C0 8135 4184 DD4D 907A 7CAE` | <https://dl.flathub.org/repo/flathub.gpg> |
+
+The fingerprints are repeated next to each app in `bitfedot/catalog.py`, and a unit test
+(`tests/test_core.py::Apps::test_pinned_fingerprints_match_the_shipped_keys`) fails if a key file
+and its catalog entry ever disagree.
+
+Keys expire and vendors rotate them. When a verification starts failing for that reason, fetch
+the new key from the vendor, confirm the fingerprint through a second channel (their website,
+their signed git tags, another distribution's packaging), replace the file and the catalog
+fingerprint together, and say where it came from in the commit message.
+
+To refresh the Bitcoin Core builder keys, copy the current `builder-keys/*.gpg`
+from guix.sigs and review the diff.

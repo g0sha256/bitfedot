@@ -1,0 +1,82 @@
+:root {
+  --accent-bg-color: #f7931a;
+  --accent-fg-color: #ffffff;
+}
+
+.bf-hero {
+  border-radius: 24px;
+  padding: 28px;
+  background-image: linear-gradient(135deg, alpha(#f7931a, 0.22), alpha(#f7931a, 0.04) 55%, alpha(#7c5cff, 0.10));
+  border: 1px solid alpha(#f7931a, 0.25);
+}
+.bf-hero.synced {
+  background-image: linear-gradient(135deg, alpha(#2ec27e, 0.20), alpha(#2ec27e, 0.03) 55%, alpha(#f7931a, 0.10));
+  border-color: alpha(#2ec27e, 0.28);
+}
+.bf-ring-value { font-size: 26pt; font-weight: 800; font-feature-settings: "tnum"; }
+.bf-ring-caption { font-size: 9pt; opacity: 0.6; letter-spacing: 1px; }
+.bf-hero-title { font-size: 20pt; font-weight: 800; }
+.bf-stat-value { font-size: 15pt; font-weight: 700; font-feature-settings: "tnum"; }
+.bf-stat-caption { font-size: 8.5pt; opacity: 0.55; letter-spacing: 1px; }
+
+.bf-card {
+  border-radius: 18px;
+  padding: 18px;
+  background-color: var(--card-bg-color);
+  box-shadow: 0 0 0 1px alpha(currentColor, 0.07), 0 2px 8px alpha(black, 0.06);
+}
+.bf-card-title { font-weight: 700; font-size: 11.5pt; }
+.bf-section { font-size: 9pt; font-weight: 700; opacity: 0.55; letter-spacing: 1.5px; }
+.bf-block-height { font-size: 22pt; font-weight: 800; font-feature-settings: "tnum"; }
+.bf-mono { font-family: monospace; font-size: 9.5pt; }
+
+.bf-pill {
+  border-radius: 99px;
+  padding: 3px 11px;
+  font-size: 8.5pt;
+  font-weight: 700;
+  background-color: alpha(currentColor, 0.10);
+}
+.bf-pill.ok { color: #26a269; background-color: alpha(#2ec27e, 0.16); }
+.bf-pill.busy { color: #e66100; background-color: alpha(#f7931a, 0.18); }
+.bf-pill.bad { color: #e01b24; background-color: alpha(#e01b24, 0.14); }
+.bf-pill.off { opacity: 0.6; }
+
+.bf-icon-badge {
+  border-radius: 12px;
+  padding: 9px;
+  background-color: alpha(#f7931a, 0.15);
+  color: #f7931a;
+}
+.bf-log { font-family: monospace; font-size: 9pt; padding: 12px; }
+.bf-brand { font-weight: 800; font-size: 12pt; }
+
+/* ---- explorer ---------------------------------------------------------- */
+.bf-tile {
+  border-radius: 16px;
+  padding: 14px 16px;
+  background-color: var(--card-bg-color);
+  box-shadow: 0 0 0 1px alpha(currentColor, 0.07), 0 2px 8px alpha(black, 0.06);
+}
+.bf-tile-value { font-size: 17pt; font-weight: 800; font-feature-settings: "tnum"; }
+.bf-tile-unit { font-size: 8.5pt; opacity: 0.55; }
+
+button.bf-block {
+  border-radius: 14px;
+  padding: 12px 14px;
+  min-width: 118px;
+  color: white;
+  background-image: linear-gradient(160deg, #7c5cff, #3d2fb5);
+  box-shadow: 0 3px 10px alpha(#3d2fb5, 0.35);
+}
+button.bf-block:hover { background-image: linear-gradient(160deg, #8f73ff, #4a3ac9); }
+button.bf-block.pending {
+  background-image: linear-gradient(160deg, #f7931a, #b85c00);
+  box-shadow: 0 3px 10px alpha(#b85c00, 0.30);
+}
+.bf-cube-height { font-size: 12.5pt; font-weight: 800; font-feature-settings: "tnum"; }
+.bf-cube-fee { font-size: 10pt; font-weight: 700; }
+.bf-cube-meta { font-size: 8.5pt; opacity: 0.85; }
+.bf-amount-in { color: #26a269; font-weight: 700; font-feature-settings: "tnum"; }
+.bf-amount-out { color: #e01b24; font-weight: 700; font-feature-settings: "tnum"; }
+.bf-num { font-feature-settings: "tnum"; }

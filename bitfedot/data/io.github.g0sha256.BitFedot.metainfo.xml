@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.g0sha256.BitFedot</id>
+  <name>BitFedot</name>
+  <summary>A complete, private, hardened Bitcoin node for Fedora</summary>
+  <developer id="io.github.g0sha256"><name>G0SHA256</name></developer>
+  <url type="homepage">https://github.com/G0SHA256/bitfedot</url>
+  <url type="bugtracker">https://github.com/G0SHA256/bitfedot/issues</url>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Unlicense</project_license>
+  <description>
+    <p>BitFedot installs and looks after Bitcoin Core, Fulcrum, Mempool and Tor.
+    Every download is verified against the developers' signatures, the initial sync
+    is tuned for your hardware, and Tor is brought up automatically once the chain
+    is synced.</p>
+    <p>It includes a block explorer running on your own node, optional verified
+    installs of a wallet, VPNs, private browsers and messengers, and Fedora-specific hardening:
+    sandboxed services, a strict firewall zone and a VPN kill switch.</p>
+  </description>
+  <launchable type="desktop-id">io.github.g0sha256.BitFedot.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <releases><release version="0.2.0" date="2026-11-16"/></releases>
+</component>

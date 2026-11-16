@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: ["41", "42", "latest"]
+    container: fedora:${{ matrix.fedora }}
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git python3 python3-gobject gtk4 libadwaita gnupg2 curl iproute \
+            desktop-file-utils libappstream-glib python3-pip
+      - uses: actions/checkout@v4
+      - name: Byte-compile
+        run: python3 -m compileall -q bitfedot
+      - name: Lint (errors only)
+        run: |
+          pip install --quiet ruff
+          ruff check bitfedot tests
+      - name: Unit tests
+        run: python3 -m unittest discover tests -v
+      - name: Import every UI module
+        run: |
+          python3 - <<'PY'
+          import importlib, pkgutil, bitfedot.ui
+          for m in pkgutil.iter_modules(bitfedot.ui.__path__):
+              importlib.import_module(f"bitfedot.ui.{m.name}")
+          import bitfedot.app, bitfedot.tray
+          PY
+      - name: Validate desktop metadata
+        run: |
+          desktop-file-validate bitfedot/data/*.desktop
+          appstream-util validate-relax --nonet bitfedot/data/*.metainfo.xml
