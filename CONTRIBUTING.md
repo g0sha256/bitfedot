@@ -11,7 +11,7 @@ python3 -m bitfedot --demo synced          # the whole UI with sample data
 python3 -m unittest discover tests         # offline, under a second
 ```
 
-You need Fedora with `python3-gobject gtk4 libadwaita gnupg2 curl` — nothing from PyPI.
+You need Fedora with `python3-gobject gobject-introspection gtk4 libadwaita gnupg2 curl` — nothing from PyPI.
 
 Useful switches while developing:
 

@@ -11,6 +11,7 @@ BuildRequires:  python3-devel
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
 Requires:       python3-gobject
+Requires:       gobject-introspection
 Requires:       gtk4
 Requires:       libadwaita
 Requires:       curl

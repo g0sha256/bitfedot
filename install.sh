@@ -17,8 +17,8 @@ if [[ "${1:-}" == "--uninstall" ]]; then
 fi
 
 missing=()
-python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1")' 2>/dev/null \
-    || missing+=(python3-gobject gtk4 libadwaita)
+python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1"); from gi.repository import Gtk, Adw' 2>/dev/null \
+    || missing+=(python3-gobject gobject-introspection gtk4 libadwaita)
 for b in curl gpg; do command -v "$b" >/dev/null || missing+=("$b"); done
 if ((${#missing[@]})); then
     echo "Missing dependencies. Install them with:"

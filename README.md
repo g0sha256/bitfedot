@@ -67,7 +67,7 @@ every file it manages is generated from one settings file by one function.
 ## Quick start
 
 ```sh
-sudo dnf install python3-gobject gtk4 libadwaita curl gnupg2   # already on Fedora Workstation
+sudo dnf install python3-gobject gobject-introspection gtk4 libadwaita curl gnupg2   # already on Fedora Workstation
 git clone https://github.com/G0SHA256/bitfedot && cd bitfedot
 ./install.sh                     # per-user install into ~/.local — no root
 ```
