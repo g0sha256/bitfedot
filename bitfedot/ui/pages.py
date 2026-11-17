@@ -2,7 +2,7 @@
 
 from gi.repository import Adw, Gio, Gtk
 
-from .. import installer, paths, services, settings, system
+from .. import hardening, installer, node, paths, services, settings, system
 from .widgets import error_text, run_async, toast
 
 THEMES = ("system", "light", "dark")
@@ -83,9 +83,18 @@ class SettingsPage(Gtk.Box):
 
         g = Adw.PreferencesGroup(title="Running")
         self.sw = {}
+        self.sleep_busy = False
+        self._switch(g, "linger", "Keep the node running when logged out",
+                     "Services keep running after you log out and start at boot, without a session.")
+        self._switch(g, "keep_awake", "Keep the computer awake while the node runs", node.AWAKE_INFO)
+        self.never_sleep = Adw.SwitchRow(
+            title="Never sleep, also with nobody logged in",
+            subtitle="Switches sleep off for the whole computer; asks for administrator rights. Without "
+                     "it the login screen puts an idle computer to sleep after a while, and the node "
+                     "with it.")
+        self.never_sleep.connect("notify::active", lambda r, _p: self._never_sleep(r.get_active()))
+        g.add(self.never_sleep)
         for key, title, sub in (
-            ("linger", "Keep the node running when logged out",
-             "Services keep running after you log out and start at boot, without a session."),
             ("autostart", "Start BitFedot at login", "Opens quietly in the background / tray."),
             ("background", "Keep running when the window is closed",
              "Closing the window hides it; use the tray icon or launch the app again to return."),
@@ -148,7 +157,10 @@ class SettingsPage(Gtk.Box):
         for key, row in self.sw.items():
             row.set_active(bool(s[key]))
         self.theme.set_selected(THEMES.index(s["theme"]) if s["theme"] in THEMES else 0)
+        if not self.sleep_busy and not snap.get("demo"):
+            self.never_sleep.set_active(hardening.never_sleep_enabled())
         self.loading = False
+        self.sw["keep_awake"].set_subtitle(node.awake_status(snap))
         self.data_row.set_subtitle(s["data_dir"])
         free = snap.get("disk_free_gb")
         self.free_row.set_subtitle(f"{free:,.0f} GB" if free is not None else "—")
@@ -183,6 +195,24 @@ class SettingsPage(Gtk.Box):
             if key == "autostart":
                 services.write_configs(s)
         run_async(work, None, lambda e: toast(self, error_text(e)))
+
+    def _never_sleep(self, enable):
+        if self.loading:
+            return
+        if self.demo:
+            return toast(self, "Demo mode — nothing is changed")
+        self.sleep_busy = True              # the switch is not synced back while the dialog is open
+
+        def finish(message):
+            self.sleep_busy = False
+            self.loading = True
+            self.never_sleep.set_active(hardening.never_sleep_enabled())
+            self.loading = False
+            toast(self, message)
+        run_async(lambda: hardening.set_never_sleep(enable),
+                  lambda _r: finish("This computer no longer goes to sleep" if enable
+                                    else "Sleep is allowed again"),
+                  lambda e: finish(error_text(e)))
 
     def _install_tray(self):
         if self.demo:

@@ -26,6 +26,15 @@ KS_UNIT = "bitfedot-killswitch.service"
 KS_RULES = "/etc/bitfedot/killswitch.nft"
 AUTO_TIMER = "dnf5-automatic.timer"
 AUTO_CONF = "/etc/dnf/dnf5-plugins/automatic.conf"
+SLEEP_CONF = "/etc/systemd/sleep.conf.d/50-bitfedot-never-sleep.conf"
+SLEEP_CONF_TEXT = """# Managed by BitFedot: this computer runs a Bitcoin node and must not go to sleep.
+# Remove this file (or switch it off in BitFedot's settings) to allow sleep again.
+[Sleep]
+AllowSuspend=no
+AllowHibernation=no
+AllowSuspendThenHibernate=no
+AllowHybridSleep=no
+"""
 _IFACE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 _ZONE = re.compile(r"^[A-Za-z0-9_-]{1,17}$")
 
@@ -261,6 +270,24 @@ def set_auto_updates(enable: bool):
                 + [f"systemctl enable --now {AUTO_TIMER}"])
     else:
         as_root([f"systemctl disable --now {AUTO_TIMER}"])
+
+
+# ------------------------------------------------------------------- sleep --
+def never_sleep_enabled() -> bool:
+    return os.path.exists(SLEEP_CONF)
+
+
+def set_never_sleep(enable: bool):
+    """Switch suspend and hibernation off for the whole computer (systemd's sleep.conf).
+
+    BitFedot's own lock (agent.keep_awake) needs no administrator, but logind grants it
+    to a logged-in user only — and the login screen suspends an idle computer by itself.
+    This closes that gap: no user, no button and no lid can put the computer to sleep
+    until the file is removed again. Takes effect at once."""
+    if enable:
+        as_root(_install_file(SLEEP_CONF, SLEEP_CONF_TEXT))
+    else:
+        as_root([_sh("rm", "-f", SLEEP_CONF)])
 
 
 # ---------------------------------------------------------------- check-up --

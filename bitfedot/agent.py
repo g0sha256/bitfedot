@@ -7,6 +7,8 @@ window is closed:
     meaningful the moment the window opens;
   * when the initial sync finishes, switches to the full-service profile and
     launches Tor, Fulcrum and Mempool;
+  * keeps the computer from going to sleep while the node is meant to run (a
+    sleeping computer does not sync);
   * in "Tor via VPN" mode, follows the VPN interface: Tor is stopped while the
     VPN is down and re-bound when its address changes;
   * checks for updates (node software and Fedora itself) once a day and sends
@@ -20,6 +22,8 @@ from . import (__version__, eta, hardening, installer, net, node, rpc, selfupdat
 
 TICK = 20
 DAY = 86400
+AWAKE_WHY = "The Bitcoin node is running"
+AWAKE_RETRY = 120       # seconds between attempts while the lock is refused (nobody logged in)
 
 
 def sync_complete(s) -> bool:
@@ -47,8 +51,40 @@ def announce(s):
         settings.update(notified=seen)
 
 
+def keep_awake(s, state):
+    """Hold a lock against sleep while the node is meant to run (system.hold_awake).
+
+    The lock lives exactly as long as a helper process of this agent, so it cannot
+    outlast the agent; it is given up when everything is stopped or the setting is
+    switched off. logind refuses it while the user is not logged in — then this
+    simply tries again every AWAKE_RETRY seconds."""
+    helper = state.get("awake")
+    if helper is not None and helper.poll() is not None:        # refused, or ended by someone
+        state["awake"] = helper = None
+        if state.get("awake_ok", True):
+            print("agent: sleep is not blocked (the lock was refused or released); trying again", flush=True)
+        state["awake_ok"] = False
+    elif helper is not None and not state.get("awake_ok"):
+        print("agent: the computer is kept awake while the node runs", flush=True)
+        state["awake_ok"] = True
+    wanted = bool(s["installed"] and not s["all_stopped"] and s["keep_awake"])
+    if not wanted:
+        if helper is not None:
+            system.release_awake(helper)
+            print("agent: sleep is no longer blocked", flush=True)
+        for key in ("awake", "awake_ok", "awake_next"):
+            state.pop(key, None)
+    elif helper is None and time.monotonic() >= state.get("awake_next", 0):
+        state["awake"] = system.hold_awake(AWAKE_WHY)
+        state["awake_next"] = time.monotonic() + AWAKE_RETRY
+
+
 def tick(state: dict):
     s = settings.load()
+    try:
+        keep_awake(s, state)
+    except OSError as e:            # must never cost the rest of the tick
+        print(f"agent: keep awake: {e}", flush=True)
     if not s["installed"]:
         return
     if s["all_stopped"]:

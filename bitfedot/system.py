@@ -4,6 +4,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 
 from . import paths
@@ -93,6 +94,56 @@ def set_linger(on: bool):
     if DRY_RUN:
         return
     run(["loginctl", "enable-linger" if on else "disable-linger"], check=True)
+
+
+# ------------------------------------------------------------------- sleep --
+def hold_awake(why: str):
+    """Start a helper that keeps the computer from going to sleep for as long as it
+    runs: a systemd "sleep" block lock, listed by `systemd-inhibit --list`. It stops
+    automatic suspend and a suspend on request alike; it does not touch the screen
+    (blanking, locking) and a laptop lid still puts the computer to sleep.
+    -> the helper process, or None where there is nothing to start.
+
+    logind grants the lock to a logged-in user only. Refused, the helper ends at
+    once — `poll()` on the result tells. It never asks for a password."""
+    if DRY_RUN or not have("systemd-inhibit"):
+        return None
+    return subprocess.Popen(
+        ["systemd-inhibit", "--what=sleep", f"--who={paths.APP_NAME}", f"--why={why}", "--mode=block",
+         "--no-ask-password", "sleep", "infinity"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True)           # its own process group: released as one
+
+
+def release_awake(helper):
+    """End a helper started by hold_awake(), and with it the lock."""
+    if helper is None or helper.poll() is not None:
+        return
+    try:
+        os.killpg(helper.pid, signal.SIGTERM)
+    except OSError:
+        helper.terminate()
+    try:
+        helper.wait(5)
+    except subprocess.TimeoutExpired:
+        helper.kill()
+
+
+def _sleep_blockers(listing: str) -> list:
+    """Output of `systemd-inhibit --list --json=short` -> who holds a lock that blocks sleep."""
+    try:
+        entries = json.loads(listing or "[]")
+    except ValueError:
+        return []
+    return [str(e.get("who", "")) for e in entries if isinstance(e, dict)
+            and e.get("mode") == "block" and "sleep" in str(e.get("what", "")).split(":")]
+
+
+def held_awake() -> bool:
+    """Is BitFedot's sleep lock in place right now?"""
+    if DRY_RUN:
+        return False
+    return paths.APP_NAME in _sleep_blockers(run(["systemd-inhibit", "--list", "--json=short"], timeout=10).stdout)
 
 
 # ---------------------------------------------------------------- hardware --

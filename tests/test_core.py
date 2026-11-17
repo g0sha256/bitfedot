@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import types
@@ -1343,6 +1344,139 @@ class Agent(unittest.TestCase):
             self.assertEqual(self.sent, expected)
 
 
+class KeepAwake(unittest.TestCase):
+    """A sleeping computer does not sync: the lock against sleep, who holds it, and what
+    the Settings page says about it."""
+
+    class Helper:
+        def __init__(self, refused=False):
+            self.code = 1 if refused else None           # refused by logind: it ends at once
+
+        def poll(self):
+            return self.code
+
+    def setUp(self):
+        self.started, self.released, self.refuse = [], [], False
+        self.real = (system.hold_awake, system.release_awake)
+
+        def hold(why):
+            self.started.append(why)
+            return self.Helper(self.refuse)
+
+        def release(helper):
+            self.released.append(helper)
+            helper.code = -15
+        for name, fake in (("hold_awake", hold), ("release_awake", release)):
+            patch = mock.patch.object(system, name, side_effect=fake)
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.s = {**settings.DEFAULTS, "installed": True}
+        self.log = io.StringIO()
+
+    def look(self, state, **over):
+        with contextlib.redirect_stdout(self.log):
+            agent.keep_awake({**self.s, **over}, state)
+
+    def test_it_is_on_by_default_and_held_while_the_node_is_meant_to_run(self):
+        self.assertTrue(settings.DEFAULTS["keep_awake"])
+        state = {}
+        self.look(state)
+        self.look(state)                                           # the next tick: still held, not taken twice
+        self.assertEqual(self.started, [agent.AWAKE_WHY])
+        self.assertIsNone(state["awake"].poll())
+        self.assertIn("kept awake", self.log.getvalue())
+
+    def test_it_is_given_up_when_everything_is_stopped_or_it_is_switched_off(self):
+        for change in ({"all_stopped": True}, {"keep_awake": False}, {"installed": False}):
+            state = {}
+            self.look(state)
+            helper = state["awake"]
+            self.look(state, **change)
+            self.assertEqual((self.released[-1], state), (helper, {}), change)
+            self.look(state)                                       # started again: taken again at once
+            self.assertIsNone(state["awake"].poll(), change)
+        self.assertEqual(len(self.started), 6)
+        self.look({}, installed=False)                             # nothing installed: nothing to keep awake for
+        self.assertEqual(len(self.started), 6)
+
+    def test_a_refused_lock_is_tried_again_later_not_every_tick(self):
+        """logind grants it to a logged-in user only: with linger the agent runs before that."""
+        self.refuse, state = True, {}
+        self.look(state)
+        for _ in range(5):                                         # 100 seconds of ticks
+            self.look(state)
+        self.assertEqual((len(self.started), state.get("awake")), (1, None))
+        self.assertEqual(self.log.getvalue().count("not blocked"), 1)             # said once
+        self.refuse, state["awake_next"] = False, 0                # two minutes on, the user has logged in
+        self.look(state)
+        self.look(state)
+        self.assertEqual(len(self.started), 2)
+        self.assertIsNone(state["awake"].poll())
+        self.assertIn("kept awake", self.log.getvalue())
+
+    def test_the_agent_looks_after_the_lock_before_anything_else(self):
+        state = {}
+        self.look(state)
+        helper = state["awake"]
+        with mock.patch.object(settings, "load", return_value={**self.s, "all_stopped": True}), \
+                contextlib.redirect_stdout(self.log):
+            agent.tick(state)                                      # "Stop all": the tick ends early — after this
+        self.assertEqual(self.released, [helper])
+        running = {**self.s, "phase": "ready", "auto_check_updates": False}      # nothing else to do this tick
+        with mock.patch.object(settings, "load", return_value=running), \
+                mock.patch.object(agent, "keep_awake", side_effect=OSError("cannot fork")), \
+                mock.patch.object(agent, "announce") as announce, contextlib.redirect_stdout(self.log):
+            agent.tick({})                                         # trouble here never costs the rest
+        announce.assert_called_once()
+
+    def test_who_blocks_sleep_is_read_from_logind(self):
+        listing = json.dumps([
+            {"who": "NetworkManager", "uid": 0, "what": "sleep", "why": "…", "mode": "delay"},
+            {"who": "fedora", "uid": 1000, "what": "handle-lid-switch", "why": "…", "mode": "block"},
+            {"who": "BitFedot", "uid": 1000, "what": "sleep", "why": agent.AWAKE_WHY, "mode": "block"},
+            {"who": "Videos", "uid": 1000, "what": "sleep:idle", "why": "Playing", "mode": "block"}])
+        self.assertEqual(system._sleep_blockers(listing), ["BitFedot", "Videos"])
+        self.assertEqual(system._sleep_blockers(""), [])
+        self.assertEqual(system._sleep_blockers("No inhibitors."), [])
+        self.assertEqual(system._sleep_blockers('{"who": "BitFedot"}'), [])
+        self.assertFalse(system.held_awake())                      # tests never ask the real logind
+
+    def test_tests_never_take_a_real_lock_and_a_real_helper_is_ended_as_one(self):
+        hold, release = self.real                                  # the real functions, for once
+        self.assertIsNone(hold("a test"))                          # BITFEDOT_ROOT is set: nothing is started
+        helper = subprocess.Popen(["sh", "-c", "sleep 30 & wait"], start_new_session=True)
+        release(helper)
+        self.assertIsNotNone(helper.poll())
+        release(helper)                                            # twice, or never started: harmless
+        release(None)
+
+    def test_the_switch_says_what_it_does_and_whether_it_is_in_effect(self):
+        snap = node.demo_snapshot(synced=False)
+        self.assertTrue(node.awake_status(snap).endswith("In effect now."))
+        self.assertIn("laptop's lid still puts it to sleep", node.awake_status(snap))
+        snap["awake"] = False
+        self.assertIn("Not in effect right now", node.awake_status(snap))
+        self.assertIn("nobody is logged in", node.awake_status(snap))
+        snap["settings"] = {**snap["settings"], "all_stopped": True}
+        self.assertIn("everything is stopped", node.awake_status(snap))
+        snap["settings"] = {**snap["settings"], "all_stopped": False, "keep_awake": False}
+        self.assertEqual(node.awake_status(snap), node.AWAKE_INFO)
+
+    def test_never_sleep_is_one_root_owned_file_and_nothing_else(self):
+        lines = []
+        with mock.patch.object(hardening, "as_root", side_effect=lines.append):
+            hardening.set_never_sleep(True)
+            hardening.set_never_sleep(False)
+        on, off = ("\n".join(batch) for batch in lines)
+        self.assertIn(f"cat > {hardening.SLEEP_CONF} <<", on)
+        self.assertTrue(hardening.SLEEP_CONF.startswith("/etc/systemd/sleep.conf.d/"))
+        for kind in ("Suspend", "Hibernation", "SuspendThenHibernate", "HybridSleep"):
+            self.assertIn(f"\nAllow{kind}=no\n", on + "\n")
+        self.assertEqual(off, f"rm -f {hardening.SLEEP_CONF}")
+        with mock.patch.object(hardening, "SLEEP_CONF", str(paths.DATA_DIR / "no-such-sleep.conf")):
+            self.assertFalse(hardening.never_sleep_enabled())
+
+
 class LocalClients(unittest.TestCase):
     """A reply cut short or garbled is `http.client.HTTPException`, not OSError: it must
     still only mean 'not answering', for the status poll and for the agent."""
@@ -1407,6 +1541,29 @@ class TrayMenu(unittest.TestCase):
         for callback in later:                                     # the main loop runs it afterwards
             callback()
         self.assertEqual(ran, ["open"])
+
+
+class Quitting(unittest.TestCase):
+    def test_the_app_can_be_closed_without_stopping_the_node(self):
+        """The node is systemd services, not this window: restarting the app after an update
+        must not cost Bitcoin Core its cache."""
+        try:
+            from bitfedot import app
+        except (ImportError, ValueError):
+            self.skipTest("PyGObject is not available")
+        did = []
+        window = types.SimpleNamespace(set_visible=lambda visible: did.append(("window", visible)))
+        fake = types.SimpleNamespace(quit=lambda: did.append("quit"), _hold=lambda: did.append("hold"),
+                                     _shut_down_and_quit=lambda: did.append("shutdown"), window=window)
+        with mock.patch.object(node, "shut_down") as stop, mock.patch.object(node, "stop_all") as stop_all:
+            app.App._quit_answer(fake, None, "quit")
+            app.App._quit_answer(fake, None, "background")
+            app.App._quit_answer(fake, None, "cancel")
+            stop.assert_not_called()
+            stop_all.assert_not_called()
+        self.assertEqual(did, ["quit", "hold", ("window", False)])
+        app.App._quit_answer(fake, None, "shutdown")               # only this one stops anything
+        self.assertEqual(did[-1], "shutdown")
 
 
 class About(unittest.TestCase):

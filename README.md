@@ -49,6 +49,7 @@ every file it manages is generated from one settings file by one function.
 | **Safe by construction** | Any change that needs a restart stops services dependents-first and waits for clean shutdowns (Mempool → Fulcrum → Bitcoin Core → Tor), then starts them in reverse. Stop/start one or all; quitting asks: *run in background* or *shut down safely*. |
 | **Updates** | Node software, apps, Fedora *and BitFedot itself*: check (through Tor when it is up), download, verify, install, restart. BitFedot installs its own update only from a release signed with the key it already carries, tests it first, and keeps the previous version for one-click rollback. |
 | **Keeps you posted** | Live status for every service — sync percentage, Fulcrum's index progress, the explorer catching up — in the app and tray, plus optional desktop notifications at milestones. |
+| **Stays awake** | A sleeping computer does not sync. While services run, BitFedot holds a lock that stops the computer from going to sleep, by itself or on request; the screen still switches off and locks. A second switch turns sleep off for the whole computer, for when nobody is logged in. |
 | **Feels native** | libadwaita, light / dark / system theme, tray icon, runs in the background. |
 
 <table>
@@ -122,11 +123,11 @@ Demo mode shows the full interface with sample data and changes nothing on your 
 cd bitfedot && git pull && ./install.sh
 ```
 
-Then close BitFedot completely and open it again — choosing *Run in background* when quitting
-keeps the old version running. `install.sh` restarts the background agent by itself, so that it
-runs the new version too (no service is stopped for that). Your node, settings and data are
-untouched by an update. Once signed releases are
-published, the app also updates itself from the Updates page.
+Then restart the app: *Quit…* → *Quit — node keeps running*, and open it again (*Run in
+background* keeps the old version running; *Shut down the node* is not needed and costs Bitcoin
+Core its cache). `install.sh` restarts the background agent by itself, so that it runs the new
+version too (no service is stopped for that). Your node, settings and data are untouched by an
+update. Once signed releases are published, the app also updates itself from the Updates page.
 
 ### Uninstall
 
@@ -317,11 +318,16 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
   accepted by the app's own updater;
 - the self-updater with a throw-away signing key: signed release installed and rolled back;
   unsigned, tampered, mislabelled and older releases refused;
-- 110 offline unit tests.
+- the lock against sleep on a real system: taken by the background agent, given up when the node
+  was shut down and taken again when it was started, with the login manager reporting suspend as
+  inhibited while it is held — on a computer that had been suspending itself after every
+  15 idle minutes, six times in one evening;
+- 119 offline unit tests.
 
 **Not yet verified end to end:** the post-sync hand-over on a fully synced chain; Fulcrum's
 initial indexing; updates across real version bumps; everything that needs root on a live system
-(RPM-based app installs, firewall zone, kill switch, Fedora updates — development had no root);
+(RPM-based app installs, firewall zone, kill switch, Fedora updates, the system-wide *Never sleep*
+switch — development had no root);
 an actual self-update from one published release to the next;
 the hardware-key setup on anything other than the one computer it was run on end to end
 (two YubiKey 5C NFC, system on two encrypted volumes);

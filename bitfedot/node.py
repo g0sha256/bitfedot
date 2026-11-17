@@ -208,6 +208,7 @@ def snapshot() -> dict:
     except OSError:
         snap["disk_free_gb"] = None
     snap["updates"] = installer.pending_updates(s)
+    snap["awake"] = bool(s["keep_awake"]) and system.held_awake()
     return snap
 
 
@@ -241,7 +242,27 @@ def demo_snapshot(synced=False) -> dict:
                     **({"height": tip} if synced else {}),
                     "message": f"Explorer ready · block {tip:,}" if synced else "Starts after initial sync"},
         "units": {}, "activity": "", "disk_free_gb": 1890.0, "updates": {"fulcrum": "2.1.5"} if synced else {},
+        "awake": True,
     }
+
+
+# ------------------------------------------------------------------- sleep --
+AWAKE_INFO = ("A sleeping computer does not sync. While services run, BitFedot keeps this one from going "
+              "to sleep, by itself or on request. The screen still switches off and locks, and closing a "
+              "laptop's lid still puts it to sleep.")
+
+
+def awake_status(snap) -> str:
+    """Subtitle of the keep-awake switch: what it does, and whether it is in effect now."""
+    s = snap["settings"]
+    if not snap.get("installed") or not s["keep_awake"]:
+        return AWAKE_INFO
+    if s["all_stopped"]:
+        return AWAKE_INFO + " Not needed right now: everything is stopped."
+    if snap.get("awake"):
+        return AWAKE_INFO + " In effect now."
+    return (AWAKE_INFO + " Not in effect right now: it is set up within two minutes of logging in, and "
+            "cannot be while nobody is logged in — the switch below covers that.")
 
 
 # ----------------------------------------------------------------- summary --

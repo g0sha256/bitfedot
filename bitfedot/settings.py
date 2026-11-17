@@ -54,6 +54,7 @@ DEFAULTS = {
 
     # --- app behaviour ----------------------------------------------------
     "linger": True,              # keep the node running while logged out
+    "keep_awake": True,          # while services run, keep the computer from going to sleep
     "autostart": True,           # start the tray app at login
     "background": True,          # closing the window keeps the app running
     "theme": "system",           # system | light | dark

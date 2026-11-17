@@ -171,21 +171,27 @@ class App(Adw.Application):
 
     # --------------------------------------------------------------- quit --
     def ask_quit(self):
-        """Quitting offers the two things it can mean for a node."""
+        """Quitting offers the three things it can mean for a node: keep the app in the
+        tray, close the app only, or stop the node as well. Closing the app must never
+        require stopping the node — a restart costs Bitcoin Core its whole cache."""
         installed = bool(self.snap and self.snap["installed"])
         if self.demo or not installed or self.snap["settings"]["all_stopped"]:
             return self.quit()                    # nothing is running that needs a decision
         self.activate()
         dlg = Adw.AlertDialog(
             heading="Quit BitFedot?",
-            body="Run in background keeps your node working — syncing, serving your wallets, "
-                 "relaying — with BitFedot in the tray.\n\n"
-                 "Shut down safely stops Mempool, Fulcrum, Bitcoin Core and Tor one after another, "
-                 "waits until everything is written to disk, then quits. The node starts again the "
-                 "next time BitFedot is opened.")
+            body="Your node does not need this window: it runs as background services and keeps "
+                 "syncing, serving your wallets and relaying either way.\n\n"
+                 "Run in background keeps BitFedot in the tray.\n\n"
+                 "Quit closes BitFedot only. The node keeps running and the background agent keeps "
+                 "you posted. Use this to restart BitFedot after an update.\n\n"
+                 "Shut down the node stops Mempool, Fulcrum, Bitcoin Core and Tor one after another, "
+                 "waits until everything is written to disk, then quits — for before the computer "
+                 "is switched off. The node starts again the next time BitFedot is opened.")
         dlg.add_response("cancel", "Cancel")
         dlg.add_response("background", "Run in background")
-        dlg.add_response("shutdown", "Shut down safely")
+        dlg.add_response("quit", "Quit — node keeps running")
+        dlg.add_response("shutdown", "Shut down the node")
         dlg.set_response_appearance("background", Adw.ResponseAppearance.SUGGESTED)
         dlg.set_response_appearance("shutdown", Adw.ResponseAppearance.DESTRUCTIVE)
         dlg.set_default_response("background")
@@ -197,6 +203,8 @@ class App(Adw.Application):
         if response == "background":
             self._hold()
             self.window.set_visible(False)
+        elif response == "quit":
+            self.quit()                           # services and the agent are not this process
         elif response == "shutdown":
             self._shut_down_and_quit()
 
@@ -228,7 +236,7 @@ class App(Adw.Application):
         threading.Thread(target=work, daemon=True).start()
 
     def _resume_if_shut_down(self):
-        """Counterpart of "Shut down safely": opening BitFedot starts the node again."""
+        """Counterpart of "Shut down the node": opening BitFedot starts the node again."""
         try:
             if not settings.load()["resume_on_launch"]:
                 return

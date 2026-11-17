@@ -8,6 +8,18 @@
 - Hardware keys: the desktop keyring opens by itself after a key login (encrypted systemd
   credential for Fedora's oo7 keyring daemon), so no typed password is left anywhere.
 
+- Stays awake: while services run, the background agent holds a systemd lock against sleep, so
+  the computer no longer suspends by itself (or on request) and stops syncing. The screen still
+  switches off and locks, and a laptop lid still puts it to sleep. On by default; switch in
+  Settings, which also says whether the lock is in effect.
+- Settings → *Never sleep, also with nobody logged in*: switches sleep off for the whole
+  computer (one root-owned file under `/etc/systemd/sleep.conf.d/`), because the login screen
+  suspends an idle computer by itself and the lock above is only granted to a logged-in user.
+
+- Quit dialog: *Quit — node keeps running* closes the app without stopping any service, so that
+  restarting BitFedot after an update no longer means restarting the node (which empties Bitcoin
+  Core's cache). *Shut down safely* is now called *Shut down the node*.
+
 ### Fixed (after a review of the two additions above, before any release)
 - Keyring step: the new password is stored, flushed to disk and read back before the keyring is
   re-keyed — an interrupted run can no longer leave the keyring on a password that exists nowhere.
