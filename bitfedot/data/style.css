@@ -77,6 +77,9 @@ button.bf-block.pending {
 .bf-cube-height { font-size: 12.5pt; font-weight: 800; font-feature-settings: "tnum"; }
 .bf-cube-fee { font-size: 10pt; font-weight: 700; }
 .bf-cube-meta { font-size: 8.5pt; opacity: 0.85; }
+/* Mining pools draw their logos for dark pages: give them one in either theme. */
+.bf-pool-logo { background-color: #1d1f31; border-radius: 6px; padding: 4px; }
+button.bf-block .bf-pool-logo { background-color: alpha(black, 0.35); border-radius: 4px; padding: 2px; }
 .bf-amount-in { color: #26a269; font-weight: 700; font-feature-settings: "tnum"; }
 .bf-amount-out { color: #e01b24; font-weight: 700; font-feature-settings: "tnum"; }
 .bf-num { font-feature-settings: "tnum"; }

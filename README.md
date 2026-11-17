@@ -42,7 +42,7 @@ every file it manages is generated from one settings file by one function.
 | **Guided, verified install** | Latest stable Bitcoin Core (≥ 3 builder signatures required), Fulcrum, Mempool and Tor. One password prompt, for the `tor` package. |
 | **Fastest initial sync, honest estimate** | Clearnet sync tuned to the machine (UTXO cache = half your RAM, blocks-only, indexes deferred). The remaining time is estimated in *transactions*, not blocks, and allows for the slow final stretch. Tor and the other services start by themselves when it finishes. |
 | **Connectivity, explained** | Clearnet · clearnet + Tor · Tor only · everything through Tor. Inbound over onion and/or public IP. Tor up/down, reconnect, new identity. Tor over the default route or **bound to a VPN**. Onion services for remote wallet access. |
-| **Built-in explorer** | Native front end to *your own* Mempool API: fees, mempool, blocks, transactions, addresses. Lookups never leave the machine. |
+| **Built-in explorer** | Native front end to *your own* Mempool API: fees, mempool, blocks with their mining pool's logo, transactions, addresses. Lookups never leave the machine — the logos, too, are the ones your Mempool serves. |
 | **Verified apps** | Optional, each checked against its developers' pinned key on install *and* update: **Sparrow** (pre-wired to your node) · **Mullvad VPN**, **Obscura VPN** · **Tor Browser**, **Mullvad Browser**, **LibreWolf** · **Element**, **SimpleX**. |
 | **Fedora hardening** | Security check-up (SELinux, firewall, LUKS, Secure Boot…), systemd sandbox for every service, strict firewalld zone, system-wide **VPN kill switch** (nftables), private transaction broadcast. |
 | **Hardware keys** *(experimental)* | Move disk encryption, login, sudo, the desktop keyring and release signing onto two YubiKeys — a main key and a backup — and then remove the password altogether. One PIN and one touch at boot. Run end to end on one computer so far; details [below](#hardware-keys-experimental). |
@@ -328,7 +328,7 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
 - the administrator-level switches on that computer, turned on from the app: the strict firewall
   zone and the VPN kill switch are loaded, and with *Never sleep* the login manager reports
   suspend as unavailable (what the first two block has not been probed);
-- 119 offline unit tests.
+- 121 offline unit tests.
 
 **Not yet verified end to end:** Fulcrum's first index through to its end, and a wallet connecting
 to it (the one computer that has got this far was at 80 % when 0.3.0 was tagged); updates across

@@ -209,6 +209,72 @@ class Explorer(unittest.TestCase):
         self.assertEqual(explorer.classify("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")[0], "address")
         self.assertEqual(explorer.classify("../../etc/passwd"), (None, None))
 
+    def test_pool_logos_come_from_this_nodes_own_mempool_and_nowhere_else(self):
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>'
+        asked = []
+
+        class Reply:
+            def __init__(self, kind, body):
+                self.headers, self.body = {"Content-Type": kind}, body
+
+            def read(self, amount=None):
+                return self.body[:amount]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def urlopen(request, timeout=None):
+            asked.append(request.full_url)
+            name = request.full_url.rsplit("/", 1)[1]
+            if name in ("foundryusa.svg", "default.svg"):
+                return Reply("image/svg+xml", svg + b"<!-- " + name.encode() + b" -->")
+            return Reply("text/html", b"<!doctype html><html></html>")     # Mempool's answer to an unknown name
+
+        with mock.patch.object(explorer, "_logos", {}), \
+                mock.patch.object(explorer.urllib.request, "urlopen", side_effect=urlopen):
+            logo = explorer.pool_logo({"id": 111, "name": "Foundry USA", "slug": "foundryusa"})
+            self.assertTrue(logo.startswith(b"<svg") and b"foundryusa.svg" in logo)
+            explorer.pool_logo({"slug": "foundryusa"})
+            self.assertEqual(asked, [explorer.BASE + "/resources/mining-pools/foundryusa.svg"])   # remembered
+            self.assertIn(b"default.svg", explorer.pool_logo({"slug": "trustpool"}))    # no logo: the generic one
+            count = len(asked)
+            # A name that could leave the folder, or is no name at all, never reaches a URL.
+            for odd in ({"slug": "../../api/v1/blocks"}, {"slug": "Foundry USA"}, {"slug": "a/b"},
+                        {"slug": ""}, {"slug": None}, {"slug": 7}, {}, None):
+                self.assertIn(b"default.svg", explorer.pool_logo(odd), odd)
+            self.assertEqual(len(asked), count)
+            self.assertTrue(all(url.startswith(explorer.BASE + "/resources/mining-pools/") for url in asked))
+
+        with mock.patch.object(explorer, "_logos", {}), \
+                mock.patch.object(explorer.urllib.request, "urlopen", side_effect=OSError("refused")) as down:
+            self.assertIsNone(explorer.pool_logo({"slug": "antpool"}))                  # Mempool is not up yet
+            self.assertIsNone(explorer.pool_logo({"slug": "antpool"}))
+            self.assertEqual(down.call_count, 2)                                        # … so it is asked again
+        huge = Reply("image/svg+xml", b"<svg>" + b" " * explorer.LOGO_MAX + b"</svg>")
+        with mock.patch.object(explorer, "_logos", {}), \
+                mock.patch.object(explorer.urllib.request, "urlopen", return_value=huge):
+            self.assertIsNone(explorer.pool_logo({"slug": "antpool"}))                  # absurdly large: not a logo
+        for block in explorer.demo_overview()["blocks"]:                                # the sample data has the shape
+            self.assertRegex(block["extras"]["pool"]["slug"], explorer._SLUG)
+            self.assertTrue(block["extras"]["pool"]["name"])
+
+    def test_a_logo_is_drawn_sharp_and_a_broken_one_is_no_crash(self):
+        try:
+            from bitfedot.ui import widgets
+        except (ImportError, ValueError):
+            self.skipTest("PyGObject is not available")
+        tall = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 76"><circle cx="16" cy="38" r="12"/></svg>'
+        self.assertIsNone(widgets.svg_texture(b"<!doctype html><html></html>", 22))
+        self.assertIsNone(widgets.svg_texture(b"", 22))
+        texture = widgets.svg_texture(tall, 22)
+        if texture is None:
+            self.skipTest("no SVG loader on this system")
+        self.assertEqual(texture.get_height(), 44)                 # twice the shown size, for dense screens
+        self.assertLess(texture.get_width(), 44)                   # … and never stretched
+
     def test_tx_math(self):
         t = {"weight": 400, "fee": 500, "vin": [{"prevout": {"scriptpubkey_address": "A", "value": 1500}}],
              "vout": [{"scriptpubkey_address": "B", "value": 700}, {"scriptpubkey_address": "A", "value": 300}]}

@@ -7,6 +7,7 @@ synced node; that is never done implicitly.)
 
 The REST API is Mempool's: https://mempool.space/docs/api/rest
 """
+import http.client
 import json
 import os
 import re
@@ -41,7 +42,7 @@ def _get(path, raw=False):
         if e.code in (400, 404):
             raise NotFound("Not found")
         raise ExplorerError(f"The explorer backend answered with HTTP {e.code}")
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         raise ExplorerError("The explorer backend is not reachable. It starts once the "
                             "blockchain is synced and Mempool is running.")
     if raw:
@@ -132,6 +133,53 @@ def search(query: str):
     raise NotFound("Enter a block height, block hash, transaction ID or address")
 
 
+# ------------------------------------------------------------- pool logos --
+_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+LOGO_MAX = 256 * 1024       # bytes; the largest that Mempool 3.3 ships is about 21 kB
+_logos = {}                 # name -> SVG bytes, or None where this Mempool has no logo of that name
+
+
+def _fetch_logo(name: str):
+    """-> the SVG, or None if this Mempool has no logo of that name.
+    Raises ExplorerError when it cannot be asked at all."""
+    req = urllib.request.Request(f"{BASE}/resources/mining-pools/{name}.svg", headers={"User-Agent": "bitfedot"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            kind = resp.headers.get("Content-Type") or ""
+            data = resp.read(LOGO_MAX + 1)
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 404):
+            return None
+        raise ExplorerError(f"The explorer backend answered with HTTP {e.code}")
+    except (OSError, ValueError, http.client.HTTPException):
+        raise ExplorerError("The explorer backend is not reachable.")
+    # Mempool's web server answers a name it does not know with its start page, not an error.
+    if not kind.startswith("image/svg") or len(data) > LOGO_MAX or b"<svg" not in data[:4096]:
+        return None
+    return data
+
+
+def pool_logo(pool):
+    """Logo of the mining pool that found a block — `pool` is the block's extras.pool —
+    as SVG bytes, or None if none can be had right now.
+
+    Like every other lookup here it is answered by this node's own Mempool, which carries
+    the logos itself: nothing is fetched from outside, and a pool's name only goes into a
+    URL after it has been checked. A pool Mempool has no logo for gets Mempool's generic
+    one. Answers are remembered while the app runs; a failure to ask is not."""
+    slug = (pool or {}).get("slug")
+    names = ([slug] if isinstance(slug, str) and _SLUG.match(slug) else []) + ["default"]
+    for name in names:
+        if name not in _logos:
+            try:
+                _logos[name] = _fetch_logo(name)
+            except ExplorerError:
+                return None
+        if _logos[name]:
+            return _logos[name]
+    return None
+
+
 # ------------------------------------------------------------- formatting --
 def btc(sats) -> str:
     return f"{(sats or 0) / 1e8:,.8f} BTC"
@@ -160,13 +208,15 @@ def address_delta(t: dict, addr: str) -> int:
 def demo_overview() -> dict:
     """Sample data for `--demo` (shape identical to the live API)."""
     now, tip = int(time.time()), 975_312
-    pools = ["Foundry USA", "AntPool", "ViaBTC", "F2Pool", "OCEAN", "MARA Pool", "SpiderPool", "Braiins"]
+    pools = [{"name": name, "slug": slug} for name, slug in (
+        ("Foundry USA", "foundryusa"), ("AntPool", "antpool"), ("ViaBTC", "viabtc"), ("F2Pool", "f2pool"),
+        ("OCEAN", "ocean"), ("MARA Pool", "marapool"), ("SpiderPool", "spiderpool"), ("Braiins Pool", "braiinspool"))]
     blocks = [{
         "id": f"00000000000000000001{(tip - i) * 7919:016x}{i:028x}", "height": tip - i,
         "timestamp": now - 410 - i * 590, "tx_count": 3811 - i * 173 % 900, "size": 1_540_000 + i * 9000,
         "weight": 3_993_000, "difficulty": 1.42e14,
         "extras": {"medianFee": 3.1 + (i * 1.7) % 6, "totalFees": 1_840_000 + i * 91_000,
-                   "reward": 312_500_000 + 1_840_000 + i * 91_000, "pool": {"name": pools[i % len(pools)]},
+                   "reward": 312_500_000 + 1_840_000 + i * 91_000, "pool": pools[i % len(pools)],
                    "feeRange": [1, 2, 3, 5, 9, 20, 140]},
     } for i in range(12)]
     return {

@@ -2,7 +2,8 @@
 
 One page with its own back/forward-less history: home → block → transaction →
 address, each fetched off the main loop and rendered with ordinary libadwaita
-rows. Nothing here talks to anything but 127.0.0.1 (see explorer.py).
+rows. Nothing here talks to anything but 127.0.0.1 (see explorer.py) — that
+includes the mining pools' logos, which this node's Mempool serves itself.
 """
 import time
 
@@ -10,9 +11,10 @@ from gi.repository import Adw, Gtk
 
 from .. import explorer as api
 from .. import node
-from .widgets import copy_text, fmt_ago, fmt_bytes, icon_button, label, run_async, toast
+from .widgets import copy_text, fmt_ago, fmt_bytes, icon_button, label, run_async, svg_texture, toast
 
 REFRESH_SECONDS = 30
+LOGO = 22           # pixels: a pool's logo in a list row; the block strip shows it smaller
 
 
 def _when(ts) -> str:
@@ -38,6 +40,8 @@ class ExplorerPage(Gtk.Box):
         self.backend_up = False
         self.loaded_at = 0
         self.busy = False
+        self.logos = {}              # pool slug -> texture, kept across the page's reloads
+        self.logo_waiting = {}       # pool slug -> callbacks, while its logo is being fetched
 
         bar = Gtk.Box(spacing=8, margin_top=10, margin_bottom=10, margin_start=18, margin_end=18)
         self.back = icon_button("go-previous-symbolic", "Back", self._go_back, css=())
@@ -221,12 +225,48 @@ class ExplorerPage(Gtk.Box):
             c.get_parent().set_focusable(False)
         return flow
 
-    def _block_button(self, top, fee, lines, pending=False, target=None):
+    def _pool_logo(self, pool, size=LOGO):
+        """The mining pool's logo on a dark chip — the logos are drawn for dark pages.
+        It is fetched once from this node's Mempool (api.pool_logo) and fills in when it
+        arrives; while there is none to show, the chip stays away."""
+        image = Gtk.Image(pixel_size=size)
+        chip = Gtk.Box(valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER, visible=False)
+        chip.add_css_class("bf-pool-logo")
+        chip.append(image)
+        key = str((pool or {}).get("slug") or "")
+
+        def show(texture):
+            if texture is not None:
+                image.set_from_paintable(texture)
+                chip.set_visible(True)
+
+        if key in self.logos:
+            show(self.logos[key])
+        elif key in self.logo_waiting:
+            self.logo_waiting[key].append(show)
+        else:
+            self.logo_waiting[key] = [show]
+
+            def done(data):
+                texture = svg_texture(data, LOGO) if data else None
+                if texture is not None:
+                    self.logos[key] = texture       # a miss is not remembered: asked again at the next reload
+                for waiting in self.logo_waiting.pop(key, []):
+                    waiting(texture)
+            run_async(lambda: api.pool_logo(pool), done, lambda e: done(None))
+        return chip
+
+    def _block_button(self, top, fee, lines, pending=False, target=None, pool=None):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         box.append(label(top, "bf-cube-height"))
         box.append(label(fee, "bf-cube-fee"))
         for text in lines:
             box.append(label(text, "bf-cube-meta", ellipsize=True))
+        if pool and pool.get("name"):
+            miner = Gtk.Box(spacing=5)
+            miner.append(self._pool_logo(pool, 14))
+            miner.append(label(pool["name"], "bf-cube-meta", ellipsize=True))
+            box.append(miner)
         b = Gtk.Button(child=box)
         b.add_css_class("bf-block")
         if pending:
@@ -258,8 +298,8 @@ class ExplorerPage(Gtk.Box):
             ex = b.get("extras", {})
             strip.append(self._block_button(
                 f"{b['height']:,}", f"~{_rate(ex.get('medianFee', 0))} sat/vB",
-                [f"{b['tx_count']:,} transactions", fmt_ago(b["timestamp"]),
-                 (ex.get("pool") or {}).get("name", "")], target=b["id"]))
+                [f"{b['tx_count']:,} transactions", fmt_ago(b["timestamp"])],
+                target=b["id"], pool=ex.get("pool")))
         self.content.append(Gtk.ScrolledWindow(child=strip, vscrollbar_policy=Gtk.PolicyType.NEVER,
                                                hscrollbar_policy=Gtk.PolicyType.AUTOMATIC))
 
@@ -279,6 +319,7 @@ class ExplorerPage(Gtk.Box):
                 title=f"{b['height']:,}", activatable=True,
                 subtitle=f"{fmt_ago(b['timestamp'])} · {b['tx_count']:,} transactions · "
                          f"{fmt_bytes(b['size'])} · {(ex.get('pool') or {}).get('name', 'Unknown')}")
+            row.add_prefix(self._pool_logo(ex.get("pool")))
             row.add_suffix(label(f"{ex.get('totalFees', 0) / 1e8:.3f} BTC fees", ["dim-label", "bf-num"]))
             row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             row.connect("activated", lambda *_a, h=b["id"]: self.open("block", h))
@@ -292,7 +333,8 @@ class ExplorerPage(Gtk.Box):
         g = self._group()
         self._prop(g, "Hash", b["id"], copy=b["id"])
         self._prop(g, "Mined", _when(b["timestamp"]))
-        self._prop(g, "Miner", (ex.get("pool") or {}).get("name", "Unknown"))
+        miner = self._prop(g, "Miner", (ex.get("pool") or {}).get("name", "Unknown"))
+        miner.add_prefix(self._pool_logo(ex.get("pool")))
         self._prop(g, "Transactions", f"{b['tx_count']:,}")
         self._prop(g, "Size", f"{fmt_bytes(b['size'])} · {b['weight'] / 1e6:.2f} MWU")
         if "medianFee" in ex:

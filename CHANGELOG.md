@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-11-17
+
+### Added
+- Explorer: every block shows the logo of the mining pool that found it — in the strip of blocks,
+  in the list of latest blocks and on the block's own page. The logos are the ones your own
+  Mempool serves; like every other lookup in the explorer, nothing is fetched from outside.
+
 ## 0.3.0 — 2026-11-17
 
 ### Added

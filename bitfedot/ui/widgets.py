@@ -8,7 +8,8 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 
 ORANGE = (0.969, 0.576, 0.102)
 GREEN = (0.180, 0.761, 0.494)
@@ -53,6 +54,19 @@ def label(text="", css=(), xalign=0.0, wrap=False, selectable=False, ellipsize=F
     for c in ([css] if isinstance(css, str) else css):
         lab.add_css_class(c)
     return lab
+
+
+def svg_texture(data: bytes, size: int):
+    """SVG bytes -> a texture at most 2 × `size` pixels wide and high (so that it stays sharp
+    on a dense screen when shown at `size`), or None if it cannot be drawn. Never raises."""
+    try:
+        stream = Gio.MemoryInputStream.new_from_bytes(GLib.Bytes.new(data))
+        pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(stream, size * 2, size * 2, True, None)
+        layout = Gdk.MemoryFormat.R8G8B8A8 if pixbuf.get_has_alpha() else Gdk.MemoryFormat.R8G8B8
+        return Gdk.MemoryTexture.new(pixbuf.get_width(), pixbuf.get_height(), layout,
+                                     pixbuf.read_pixel_bytes(), pixbuf.get_rowstride())
+    except (GLib.Error, TypeError, ValueError):
+        return None
 
 
 def fmt_bytes(n) -> str:
