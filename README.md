@@ -322,12 +322,18 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
   was shut down and taken again when it was started, with the login manager reporting suspend as
   inhibited while it is held — on a computer that had been suspending itself after every
   15 idle minutes, six times in one evening;
+- a complete first sync on one computer and the hand-over after it: the background agent switched
+  to the full profile and started Tor, Fulcrum and Mempool by itself, and Fulcrum's index and
+  Mempool's partial readiness showed in the app as they happened;
+- the administrator-level switches on that computer, turned on from the app: the strict firewall
+  zone and the VPN kill switch are loaded, and with *Never sleep* the login manager reports
+  suspend as unavailable (what the first two block has not been probed);
 - 119 offline unit tests.
 
-**Not yet verified end to end:** the post-sync hand-over on a fully synced chain; Fulcrum's
-initial indexing; updates across real version bumps; everything that needs root on a live system
-(RPM-based app installs, firewall zone, kill switch, Fedora updates, the system-wide *Never sleep*
-switch — development had no root);
+**Not yet verified end to end:** Fulcrum's first index through to its end, and a wallet connecting
+to it (the one computer that has got this far was at 80 % when 0.3.0 was tagged); updates across
+real version bumps; what the firewall zone and the kill switch actually block; RPM-based app
+installs and Fedora updates run from the app (development had no root);
 an actual self-update from one published release to the next;
 the hardware-key setup on anything other than the one computer it was run on end to end
 (two YubiKey 5C NFC, system on two encrypted volumes);

@@ -470,8 +470,25 @@ def reconfigure(app_id):
         hook()
 
 
-def status(app_id, s) -> dict:
-    """-> {'installed': version | '', 'ready': can it be opened now?, 'note': why not}"""
+def _waiting_for_fulcrum(fulcrum) -> str:
+    """Why an app that talks to Fulcrum cannot reach the node right now ('' when it can, or
+    when the caller has no status at hand). Fulcrum opens its port only once its index is
+    complete — until then a wallet just reports "connection refused"."""
+    state = (fulcrum or {}).get("state", "running")
+    if state == "running":
+        return ""
+    if state == "syncing":
+        done = fulcrum.get("progress")
+        return ("opens, but cannot connect to your node yet: Fulcrum is still building its index"
+                + (f" ({int(done * 100)}%)" if done is not None else ""))
+    if state == "error":
+        return "opens, but cannot connect to your node: Fulcrum has failed — see Logs"
+    return "opens, but cannot connect to your node yet: Fulcrum is starting"
+
+
+def status(app_id, s, fulcrum=None) -> dict:
+    """-> {'installed': version | '', 'ready': can it be opened now?, 'note': what to know first}
+    `fulcrum` is Fulcrum's card from node.snapshot(), where the caller has one."""
     app = get(app_id)
     info = {"installed": installed_version(app_id, s), "ready": False, "note": ""}
     if not info["installed"]:
@@ -481,6 +498,9 @@ def status(app_id, s) -> dict:
             info["note"] = "usable once the initial sync has finished"
         elif s["all_stopped"] or not (s["bitcoind_enabled"] and s["fulcrum_enabled"]):
             info["note"] = "start Fulcrum to use it"
+        else:                       # it can be opened — to set up a wallet, say — but say what to expect
+            info.update(ready=True, note=_waiting_for_fulcrum(fulcrum))
+            return info
     info["ready"] = not info["note"]
     return info
 

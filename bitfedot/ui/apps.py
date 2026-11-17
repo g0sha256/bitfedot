@@ -107,8 +107,12 @@ class AppsPage(Gtk.Box):
                 version = demo_installed.get(app.id, "")
                 info = {"installed": version, "ready": bool(version), "note": ""}
             else:
-                info = apps.status(app.id, s)
+                info = apps.status(app.id, s, snap.get("fulcrum"))
             w["installed"] = info["installed"]
+            w["note"] = info["note"] if info["installed"] else ""
+            # What stands in the way is shown without opening the row.
+            note = w["note"][:1].upper() + w["note"][1:]
+            w["row"].set_subtitle(app.summary + (f"\n{note}." if note else ""))
             w["manage"].set_visible(bool(info["installed"]))
             latest = s.get("available", {}).get(app.id, "")
             newer = bool(info["installed"]) and apps.net.is_newer(latest, info["installed"]) \
@@ -148,7 +152,9 @@ class AppsPage(Gtk.Box):
         try:
             apps.launch(app.id)
         except OSError as e:
-            toast(self, error_text(e))
+            return toast(self, error_text(e))
+        if self.rows[app.id].get("note"):                # e.g. Fulcrum is still building its index
+            toast(self, f"{app.title} {self.rows[app.id]['note']}")
 
     def _busy(self, app, on):
         (self.busy.add if on else self.busy.discard)(app.id)

@@ -1,13 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-17
 
 ### Added
 - Status updates: Fulcrum's index progress and Mempool's catch-up in the app and tray, and
   desktop notifications for sync milestones, services becoming ready, and failures.
 - Hardware keys: the desktop keyring opens by itself after a key login (encrypted systemd
   credential for Fedora's oo7 keyring daemon), so no typed password is left anywhere.
-
 - Stays awake: while services run, the background agent holds a systemd lock against sleep, so
   the computer no longer suspends by itself (or on request) and stops syncing. The screen still
   switches off and locks, and a laptop lid still puts it to sleep. On by default; switch in
@@ -15,12 +14,18 @@
 - Settings → *Never sleep, also with nobody logged in*: switches sleep off for the whole
   computer (one root-owned file under `/etc/systemd/sleep.conf.d/`), because the login screen
   suspends an idle computer by itself and the lock above is only granted to a logged-in user.
-
 - Quit dialog: *Quit — node keeps running* closes the app without stopping any service, so that
   restarting BitFedot after an update no longer means restarting the node (which empties Bitcoin
   Core's cache). *Shut down safely* is now called *Shut down the node*.
+- `tools/keyring-rehearsal.py` runs the keyring step's switch, repeat, undo and failure cases
+  against the real keyring service on throw-away keyrings, without touching the login keyring.
 
-### Fixed (after a review of the two additions above, before any release)
+### Fixed
+All but the first were found by a review of this version's own additions, before it was released.
+
+- Apps: a wallet that talks to Fulcrum (Sparrow) is no longer shown as ready while Fulcrum is
+  still building its index. It can be opened, and the page — and a note when it is opened — say
+  that it cannot connect to the node yet, and how far the index is.
 - Keyring step: the new password is stored, flushed to disk and read back before the keyring is
   re-keyed — an interrupted run can no longer leave the keyring on a password that exists nowhere.
   Running the step again recognises a keyring that is already switched over instead of locking it
@@ -33,14 +38,12 @@
   state follows the stored credential and the last run of the step, so `undo` and an unfinished
   repeat are reflected; the revert script offers the undo. `undo` refuses, instead of guessing,
   when the stored password does not open a keyring that is shut.
-- `tools/keyring-rehearsal.py` runs the keyring step's switch, repeat, undo and failure cases
-  against the real keyring service on throw-away keyrings, without touching the login keyring.
 - Notifications: a service that crashes and is restarted is announced (systemd never reports such
   a unit as failed), at most once an hour and only while it is meant to run; a notification
-  nobody could see is kept for later; a
-  synced node that is a few blocks behind is no longer a "sync 90 %" milestone; Fulcrum's index
-  never shows 100 % before it serves; the explorer counts as ready only once Fulcrum serves; a new
-  sync or index is announced afresh; the first run only takes stock.
+  nobody could see is kept for later; a synced node that is a few blocks behind is no longer a
+  "sync 90 %" milestone; Fulcrum's index never shows 100 % before it serves; the explorer counts
+  as ready only once Fulcrum serves; a new sync or index is announced afresh; the first run only
+  takes stock.
 - Agent: the VPN watch runs before the status check again and can no longer be skipped or delayed
   by it; a garbled reply from a local service no longer aborts a status poll.
 - Explorer page: a short lag of Mempool behind Bitcoin Core no longer disables it or replaces the

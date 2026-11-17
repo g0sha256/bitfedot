@@ -283,6 +283,17 @@ class Apps(unittest.TestCase):
         self.assertFalse(apps.status("sparrow", s)["ready"])        # needs Fulcrum, i.e. a synced node
         self.assertTrue(apps.status("element", s)["ready"])
         self.assertTrue(apps.status("sparrow", {**s, "phase": "ready"})["ready"])
+        # Synced, Fulcrum switched on — but it opens its port only once its index is complete.
+        # Sparrow can be opened, and the page says why it will not connect yet.
+        ready = {**s, "phase": "ready"}
+        building = apps.status("sparrow", ready, {"state": "syncing", "progress": 0.804})
+        self.assertTrue(building["ready"])
+        self.assertIn("cannot connect to your node yet", building["note"])
+        self.assertIn("building its index (80%)", building["note"])
+        self.assertEqual(apps.status("sparrow", ready, {"state": "running", "height": 976_315})["note"], "")
+        self.assertIn("Fulcrum has failed", apps.status("sparrow", ready, {"state": "error"})["note"])
+        self.assertIn("Fulcrum is starting", apps.status("sparrow", ready, {"state": "starting"})["note"])
+        self.assertEqual(apps.status("element", ready, {"state": "syncing", "progress": 0.1})["note"], "")
         self.assertEqual(apps.status("mullvad", s)["installed"], "")
 
 
