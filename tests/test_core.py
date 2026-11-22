@@ -1226,12 +1226,14 @@ class HardwareKeys(unittest.TestCase):
         self.assertIn("authselect apply-changes", hk.GUARD_TEXT.split(hk.PAM_STACK)[1])
         hw = {"main": "111111", "backup": "222222"}
         base = {"password_locked": True, "pam_u2f": True, "pam_wired": True, "hidden_at_login": False}
-        self.assertEqual(hk.health(base, hw), [])
-        hidden = hk.health({**base, "hidden_at_login": True}, hw)
-        self.assertTrue(hidden and hidden[0][1].endswith(hk.REPAIR_HINT))
-        unwired = hk.health({**base, "pam_wired": False}, hw)
-        self.assertEqual(unwired[0][0], "critical")
-        self.assertEqual(hk.health({**base, "hidden_at_login": None}, hw), [])   # no answer is not a finding
+        # whatever this computer has in /etc and /var: only the facts handed in count here
+        with mock.patch.object(hk, "PROTECTED", __file__), mock.patch.object(hk, "BOOT_FLAGS", "/nonexistent"):
+            self.assertEqual(hk.health(base, hw), [])
+            hidden = hk.health({**base, "hidden_at_login": True}, hw)
+            self.assertTrue(hidden and hidden[0][1].endswith(hk.REPAIR_HINT))
+            unwired = hk.health({**base, "pam_wired": False}, hw)
+            self.assertEqual(unwired[0][0], "critical")
+            self.assertEqual(hk.health({**base, "hidden_at_login": None}, hw), [])   # no answer is not a finding
         # undoing it is the one place a password comes back, and it is asked for before anything is removed
         revert = s["revert"]
         self.assertLess(revert.index("sudo passwd fedora"), revert.index("authselect disable-feature"))
