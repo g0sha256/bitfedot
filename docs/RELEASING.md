@@ -48,6 +48,14 @@ so people who install from a git checkout can verify what they run.
    It runs the tests, creates the signed tag, builds `dist/bitfedot-<version>.tar.gz` with
    `git archive`, writes and signs `SHA256SUMS`, and checks that the key *inside the release*
    verifies it.
+
+   It also lets every earlier version install the new one (`tools/update-rehearsal.py`), in a
+   scratch folder: once before the tag is made, with a throw-away key, and once with the signed
+   files. An installed copy updates itself with its *own* code — its key, its unpacking, and a
+   run of the new version's tests, by the app or by its background agent — so whether a release
+   can be installed is decided by versions that are already out. If the rehearsal fails, do not
+   publish: fix it and release the next number (0.3.2 was tagged, failed this, and was never
+   published).
 5. Push the tag and attach the three files from `dist/` to the GitHub release. The updater
    downloads exactly these names from `releases/download/v<version>/`.
 

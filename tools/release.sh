@@ -17,8 +17,13 @@ ls bitfedot/keys/bitfedot/*.asc >/dev/null 2>&1 || {
 echo "== Tests"
 python3 -m unittest discover tests
 
+echo "== Check: can the versions that are out install this one? (throw-away key, nothing signed yet)"
+python3 -P tools/update-rehearsal.py --unsigned
+
 echo "== Tag $tag (signed)"
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git tag -s "$tag" -m "BitFedot $version"
+[[ "$(git rev-parse "$tag^{commit}")" == "$(git rev-parse HEAD)" ]] || {
+    echo "Tag $tag exists and is not this commit: what would be archived is not what was just tested."; exit 1; }
 
 echo "== Archive"
 mkdir -p dist
@@ -30,6 +35,9 @@ echo "== Check: does the key shipped in this very release verify it?"
 home=$(mktemp -d); trap 'rm -rf "$home"' EXIT
 gpg --homedir "$home" --batch -q --import bitfedot/keys/bitfedot/*.asc
 gpg --homedir "$home" --batch --trust-model always --verify dist/SHA256SUMS.asc dist/SHA256SUMS
+
+echo "== Check: the versions that are out install these very files, each with the key it was shipped with"
+python3 -P tools/update-rehearsal.py
 
 cat <<DONE
 

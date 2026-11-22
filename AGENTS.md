@@ -105,6 +105,7 @@ migration) · `widgets.py` (helpers: `run_async`, `toast`, formatting). `app.py`
 | Change the sync estimate | constants at the top of `eta.py` → §6 |
 | Cut a release / pin a new Mempool version | `docs/RELEASING.md`, `tools/release.sh`, `pins.py` |
 | Check a change to the keyring stage for real | `python3 -P tools/keyring-rehearsal.py` — the real keyring service and `systemd-creds`, on throw-away keyrings; never the login keyring. The unit tests only know a fake service |
+| Check that installed copies can update to a change | `python3 -P tools/update-rehearsal.py --unsigned` — every earlier version (the `v*` tags) installs the tree as it is now with its own updater code, as the app and as its background agent, in a scratch folder. CI runs it; `tools/release.sh` runs it on the signed files too |
 | Check a change to `services.apply()` for real | `python3 -P tools/apply-rehearsal.py` — the real `systemctl --user`, with throw-away units that only sleep in place of the services; never a `bitfedot-*` unit, so it is safe beside a running node. The unit tests only know a fake systemd |
 
 ## Known gaps (good places to help)

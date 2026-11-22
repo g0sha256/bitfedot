@@ -93,13 +93,19 @@ def _tree_version(tree: Path) -> str:
 
 
 def _preflight(tree: Path):
-    """The new version must import and pass its own tests before it replaces anything."""
+    """The new version must import and pass its own tests before it replaces anything.
+
+    It is that tree which is tested, whatever folder this process happens to be in (-P: a
+    `bitfedot` package there — the app started from a source checkout — is not imported in
+    its place), on a scratch root, and as nobody's agent: when it is the background agent
+    that installs the update, its marker is not passed on."""
     env = {**os.environ, "PYTHONPATH": str(tree), "PYTHONDONTWRITEBYTECODE": "1",
            "BITFEDOT_ROOT": tempfile.mkdtemp(prefix="bitfedot-preflight-")}
+    env.pop("BITFEDOT_AGENT", None)
     try:
-        checks = [[sys.executable, "-c", "import bitfedot.services, bitfedot.apps, bitfedot.agent"]]
+        checks = [[sys.executable, "-P", "-c", "import bitfedot.services, bitfedot.apps, bitfedot.agent"]]
         if (tree / "tests").is_dir():
-            checks.append([sys.executable, "-m", "unittest", "discover", "-s", str(tree / "tests")])
+            checks.append([sys.executable, "-P", "-m", "unittest", "discover", "-s", str(tree / "tests")])
         for cmd in checks:
             p = system.run(cmd, timeout=300, env=env)
             if p.returncode != 0:

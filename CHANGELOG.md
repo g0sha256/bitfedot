@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.3 — 2026-11-22
+
+0.3.2 was tagged but never published as a release: installed copies could not have updated
+themselves to it (the first entry). 0.3.3 is 0.3.2 with that put right.
+
+### Fixed
+- An installed copy runs the new version's tests before it switches over. Three of the tests
+  that came with 0.3.2 failed when it was the background agent that ran them — which it does
+  for an automatic update — so every automatic update to 0.3.2 would have been refused. The
+  tests no longer depend on who runs them or from which folder, and the updater no longer
+  passes the agent's marker on to them.
+
+### Added
+- `tools/update-rehearsal.py`: every earlier version installs the new one with its own updater
+  code — its release key, its unpacking, its run of the new tests — as the app and as its
+  background agent, and rolls back; all in a scratch folder. `tools/release.sh` runs it before
+  the tag is made and again on the signed files, and CI runs it on every push.
+
 ## 0.3.2 — 2026-11-22
 
 ### Fixed

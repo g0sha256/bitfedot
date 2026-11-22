@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import types
@@ -20,6 +21,12 @@ from pathlib import Path
 from unittest import mock
 
 os.environ["BITFEDOT_ROOT"] = tempfile.mkdtemp(prefix="bitfedot-test-")
+# An installed copy runs this suite before it switches to a new version (selfupdate._preflight).
+# Copies up to 0.3.2 do so from whatever folder they were started in and with their whole
+# environment, the background agent's included. So, whoever runs this and from where: it is
+# the package next to this file that is tested, and it is nobody's agent.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ.pop("BITFEDOT_AGENT", None)
 
 from bitfedot import (about, agent, apps, eta, explorer, hardening, installer, migrate, net, node,  # noqa: E402
                       paths, pins, rpc, selfupdate, services, settings, system, verify)
@@ -891,6 +898,7 @@ class SupplyChain(unittest.TestCase):
 
 class SelfUpdate(unittest.TestCase):
     """A release is installed only when signed by a key shipped with the running app."""
+    preflight = staticmethod(selfupdate._preflight)     # the real one; setUp() replaces it with a stub
 
     @classmethod
     def setUpClass(cls):
@@ -978,6 +986,30 @@ class SelfUpdate(unittest.TestCase):
                 selfupdate.install_release(self.release("9.9.9"), "9.9.9")
         self.assertEqual(selfupdate._tree_version(self.live), "0.0.1")
         self.assertFalse(selfupdate._stage_dir().exists())
+
+    def test_the_self_test_runs_the_new_trees_own_tests_and_not_as_the_agent(self):
+        """It is the background agent that installs an automatic update. The suite it runs first
+        must not be told that it is the agent: 0.3.2 could not be installed that way."""
+        tree = self.tmp / "tree"
+        shutil.rmtree(tree, ignore_errors=True)
+        for name in ("__init__", "services", "apps", "agent"):
+            (tree / "bitfedot").mkdir(parents=True, exist_ok=True)
+            (tree / "bitfedot" / f"{name}.py").write_text("")
+        (tree / "tests").mkdir()
+        test = tree / "tests" / "test_it.py"
+        test.write_text("import os, unittest\n"
+                        "import bitfedot\n"
+                        "class T(unittest.TestCase):\n"
+                        "    def test_where_and_as_whom(self):\n"
+                        f"        self.assertEqual(os.path.dirname(bitfedot.__file__), {str(tree / 'bitfedot')!r})\n"
+                        "        self.assertNotIn('BITFEDOT_AGENT', os.environ)\n"
+                        "        self.assertTrue(os.path.isdir(os.environ['BITFEDOT_ROOT']))\n"
+                        f"        self.assertNotEqual(os.environ['BITFEDOT_ROOT'], {os.environ['BITFEDOT_ROOT']!r})\n")
+        with mock.patch.dict(os.environ, {"BITFEDOT_AGENT": "1"}):
+            self.preflight(tree)
+            test.write_text(test.read_text() + "        self.fail('this version is broken')\n")
+            with self.assertRaisesRegex(RuntimeError, "failed its self-test(.|\\n)*this version is broken"):
+                self.preflight(tree)
 
 
 class HardwareKeys(unittest.TestCase):

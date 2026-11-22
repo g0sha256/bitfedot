@@ -321,6 +321,9 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
   accepted by the app's own updater;
 - the self-updater with a throw-away signing key: signed release installed and rolled back;
   unsigned, tampered, mislabelled and older releases refused;
+- every earlier version (0.2.0 to 0.3.2) installing this one with its own updater code — its
+  release key, its unpacking, its run of the new tests — as the app and as its background
+  agent, and rolling back, in a scratch folder (`tools/update-rehearsal.py`);
 - the lock against sleep on a real system: taken by the background agent, given up when the node
   was shut down and taken again when it was started, with the login manager reporting suspend as
   inhibited while it is held — on a computer that had been suspending itself after every
@@ -336,13 +339,14 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
   order of stops, files replaced only once their readers were down, a service that would not
   stop, the applying process killed in the middle — and both of those finished afterwards —
   and stopping everything while one service has no unit;
-- 159 offline unit tests.
+- 160 offline unit tests.
 
 **Not yet verified end to end:** Fulcrum's first index through to its end, and a wallet connecting
 to it (the one computer that has got this far was at 80 % when 0.3.0 was tagged); updates across
 real version bumps; what the firewall zone and the kill switch actually block; RPM-based app
 installs and Fedora updates run from the app (development had no root);
-an actual self-update from one published release to the next;
+an actual self-update of an installed copy, downloaded from a published release (it has been
+rehearsed in a scratch folder only);
 the hardware-key setup on anything other than the one computer it was run on end to end
 (two YubiKey 5C NFC, system on two encrypted volumes);
 the reworked keyring step from start to finish on a login keyring (its logic has been run against
