@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.4 — 2026-11-22
+
+### Fixed
+- Hardware keys: after the password was removed, the login screen stopped listing the user and
+  asked for a user name instead — from the first restart on. The final step locked the password
+  (`passwd -l`), and the login screen leaves locked accounts out of its list. The password is
+  now removed in the form that matches nothing and is not "locked". Logging in with the key
+  worked throughout. On a computer already set up, the Hardware keys page says so and offers
+  *Repair*; no password is involved.
+
+### Changed
+- Hardware keys, surviving updates: the guard now also runs before the login screen starts
+  (so it acts right after an upgrade that was installed during a restart), regenerates the
+  login settings when they no longer call the key module although the feature is on, keeps a
+  removed password in the listed form, and is triggered by changes to the password file and
+  the generated login settings. The page warns before a restart when the settings in force do
+  not use the key.
+- Hardware keys, *Undo*: there is no old password to bring back any more, so it asks for a
+  new one first and changes nothing if none is set.
+
 ## 0.3.3 — 2026-11-22
 
 0.3.2 was tagged but never published as a release: installed copies could not have updated

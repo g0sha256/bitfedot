@@ -54,6 +54,10 @@ BOOT_FLAGS = "/var/lib/bitfedot"                             # boot-warning-<ker
 SAVED = "/etc/bitfedot/hwkeys"                               # root-owned copies of the login settings
 GUARD = "/usr/local/libexec/bitfedot-hwkeys-guard"
 GUARD_UNITS = ("bitfedot-hwkeys-guard.service", "bitfedot-hwkeys-guard.path")
+REMOVED = f"{SAVED}/password-removed"                        # holds the user whose password was removed
+PAM_STACK = "/etc/pam.d/system-auth"                         # what authselect generates; login and sudo include it
+PAM_MODULES = ("/usr/lib64/security/pam_u2f.so", "/usr/lib/security/pam_u2f.so")
+REPAIR_HINT = "Press Repair."
 ROLES = ("main", "backup")
 CONFIRM_PHRASE = "REMOVE THE PASSWORD"
 _SERIAL = re.compile(r"^\d{4,12}$")
@@ -243,6 +247,31 @@ def keyring_facts() -> dict:
     return dict(known)
 
 
+def hidden_at_login(user: str):
+    """Does the login screen leave this user out of its list? It does for an account the
+    accounts service calls locked, and then asks for a name to be typed instead.
+    -> True | False, or None when the accounts service does not answer."""
+    bus = ["busctl", "--system", "--no-pager"]
+    found = run(bus + ["call", "org.freedesktop.Accounts", "/org/freedesktop/Accounts",
+                       "org.freedesktop.Accounts", "FindUserByName", "s", user], timeout=15).stdout.split()
+    if len(found) != 2 or found[0] != "o":
+        return None
+    said = run(bus + ["get-property", "org.freedesktop.Accounts", found[1].strip('"'),
+                      "org.freedesktop.Accounts.User", "Locked"], timeout=15).stdout.split()
+    return said[1] == "true" if len(said) == 2 and said[0] == "b" else None
+
+
+def pam_wired() -> bool:
+    """Do the login settings in force actually call the hardware-key module, and is it there?
+    (The feature can be switched on while the generated file lacks it: a release upgrade
+    may replace the profile it is generated from.)"""
+    try:
+        stack = Path(PAM_STACK).read_text()
+    except OSError:
+        return False
+    return "pam_u2f.so" in stack and any(os.path.exists(m) for m in PAM_MODULES)
+
+
 def facts() -> dict:
     """Everything about the system the stages depend on. Unprivileged, and safe
     to poll: it never opens a connection to a key."""
@@ -257,7 +286,9 @@ def facts() -> dict:
         "luks": luks_devices(),
         "fido2_boot": fido2_unlocked_this_boot(),
         "pam_u2f": "with-pam-u2f" in auth,
+        "pam_wired": pam_wired(),
         "password_locked": len(pw) > 1 and pw[1].startswith("L"),
+        "hidden_at_login": hidden_at_login(user) if _USER.match(user) else None,
         "terminal": terminal_command() is not None,
         **keyring_facts(),
     }
@@ -295,7 +326,16 @@ def health(f: dict = None, hw: dict = None) -> list:
     if f["password_locked"] and not f["pam_u2f"]:
         problems.append(("critical", "Your password is locked but hardware-key login is switched off. "
                                      "Fix it before closing this session: "
-                                     "“sudo authselect enable-feature with-pam-u2f”."))
+                                     "“sudo authselect enable-feature with-pam-u2f”. " + REPAIR_HINT))
+    elif f["pam_u2f"] and not f.get("pam_wired", True):
+        problems.append(("critical" if f["password_locked"] else "warning",
+                         "Hardware-key login is switched on, but the login settings in force do not use "
+                         "it (an update may have replaced them). Do not log out or restart until this "
+                         "is fixed. " + REPAIR_HINT))
+    if f["password_locked"] and f.get("hidden_at_login"):
+        problems.append(("warning", "The login screen does not list you and asks for your user name "
+                                    "instead: the account counts as locked. Logging in with the key "
+                                    "still works. " + REPAIR_HINT))
     if (hw.get("disk") or f["pam_u2f"]) and not os.path.exists(PROTECTED):
         problems.append(("warning", "The packages needed for hardware-key boot and login are not "
                                     "protected from removal. Run the disk and login steps again."))
@@ -330,12 +370,26 @@ GUARD_TEXT = f"""#!/usr/bin/bash
 if ! authselect current 2>/dev/null | grep -q with-pam-u2f; then
     authselect enable-feature with-pam-u2f && authselect apply-changes
 fi
+# The feature can be on while the file generated from the profile lacks the module
+# (a release upgrade replaced the profile): generate it again.
+grep -qs pam_u2f.so {PAM_STACK} || authselect apply-changes
+# A removed password must be "matches nothing" (*), not "locked" (!): the login screen
+# leaves locked accounts out of its list and asks for a user name instead.
+if [ -s {REMOVED} ]; then
+    user=$(head -n 1 {REMOVED})
+    case "$user" in
+        ""|*[!a-z0-9_-]*) ;;
+        *) getent shadow "$user" | cut -d: -f2 | grep -q '^!' && usermod -p '*' "$user" ;;
+    esac
+fi
 exit 0
 """
 
 GUARD_SERVICE_TEXT = f"""# Installed by BitFedot
 [Unit]
 Description=BitFedot: keep hardware-key login configured
+# also after an upgrade that was installed during a restart: before anyone can log in
+Before=display-manager.service systemd-user-sessions.service
 
 [Service]
 Type=oneshot
@@ -353,6 +407,8 @@ Description=BitFedot: re-check hardware-key login when its settings change
 PathChanged=/etc/authselect/authselect.conf
 PathChanged={U2F_CONF}
 PathChanged={U2F_MAPPINGS}
+PathChanged={PAM_STACK}
+PathChanged=/etc/shadow
 Unit={GUARD_UNITS[0]}
 
 [Install]
@@ -737,13 +793,57 @@ finish
 """
 
 
+def _guard_files() -> str:
+    return (_protect_packages() + _root_file(GUARD, GUARD_TEXT, "755")
+            + _root_file(f"/etc/systemd/system/{GUARD_UNITS[0]}", GUARD_SERVICE_TEXT)
+            + _root_file(f"/etc/systemd/system/{GUARD_UNITS[1]}", GUARD_PATH_TEXT))
+
+
+def _remove_password(user: str) -> str:
+    """No password at all, in the form that does not hide the user from the login screen:
+    `passwd -l` marks the account locked (!), and locked accounts are left out of the list.
+    The guard is told whose password is gone, so that it keeps it in this form."""
+    return f"""sudo usermod -p '*' {_q(user)}
+sudo install -d -m 755 {SAVED}
+echo {_q(user)} | sudo tee {REMOVED} >/dev/null
+sleep 2     # the accounts service re-reads the password file by itself
+if busctl --system get-property org.freedesktop.Accounts "/org/freedesktop/Accounts/User$(id -u {_q(user)})" \\
+        org.freedesktop.Accounts.User Locked 2>/dev/null | grep -q true; then
+    echo "    NOTE: the login screen may still ask for your user name until the next restart."
+else
+    echo "    The login screen lists {user} as before."
+fi
+"""
+
+
+def repair_script(user: str) -> str:
+    """Put the pieces that keep key login working back in place, on a system already set up:
+    the guard in its current form, the login settings, and a removed password in the form
+    the login screen accepts. Changes nothing a key does not already protect; adds no password."""
+    if not _USER.match(user):
+        raise ValueError("Unexpected user name.")
+    return HEADER + f"""
+say "Repairing hardware-key login (needs your key for sudo: PIN + touch)"
+[ -s {SAVED}/u2f_mappings ] || {{ echo "    Hardware-key login was not set up by BitFedot on this computer."; false; }}
+{_guard_files()}
+sudo systemctl daemon-reload
+sudo systemctl enable --now {GUARD_UNITS[1]} {GUARD_UNITS[0]}
+if [ "$(sudo passwd -S {_q(user)} | cut -d' ' -f2)" = "L" ]; then
+    say "The password of {user} is removed: keeping it that way, in the form the login screen lists"
+{_remove_password(user)}
+fi
+sudo {GUARD}
+grep -q pam_u2f.so {PAM_STACK} || {{ echo "    The login settings still do not use the key. Do NOT log out; ask for help."; false; }}
+say "Test now, in a NEW terminal, keeping this one open:   sudo -k && sudo true"
+finish
+"""
+
+
 def login_script(user: str) -> str:
     """Register both keys for login, sudo and polkit — the password stays."""
     if not _USER.match(user):
         raise ValueError("Unexpected user name.")
-    guard = (_protect_packages() + _root_file(GUARD, GUARD_TEXT, "755")
-             + _root_file(f"/etc/systemd/system/{GUARD_UNITS[0]}", GUARD_SERVICE_TEXT)
-             + _root_file(f"/etc/systemd/system/{GUARD_UNITS[1]}", GUARD_PATH_TEXT))
+    guard = _guard_files()
     return HEADER + f"""
 need_tools
 say "Registering both keys for {user} (PIN + touch each time). The password keeps working."
@@ -848,9 +948,8 @@ read -r -p "    Type exactly  {CONFIRM_PHRASE}  to go on: " answer
 say "Plug in one of your keys."
 pause
 {recovery}{wipe}
-say "Locking the login password of {user}: login, sudo and administrator prompts accept only a key"
-sudo passwd -l {_q(user)}
-touch "$STATE/hwkey-final.done"
+say "Removing the login password of {user}: login, sudo and administrator prompts accept only a key"
+{_remove_password(user)}touch "$STATE/hwkey-final.done"
 say "Finished. Keep the backup key somewhere else than the main one."
 finish
 """
@@ -880,7 +979,10 @@ fi
 """
     return HEADER + f"""
 say "Reverting BitFedot's hardware-key changes"
-sudo passwd -u {_q(user)} || true
+if [ "$(sudo passwd -S {_q(user)} | cut -d' ' -f2)" = "L" ]; then
+    say "There is no login password any more. Choose one now — without it, nothing could log in after this"
+    sudo passwd {_q(user)}
+fi
 sudo systemctl disable --now {GUARD_UNITS[1]} {GUARD_UNITS[0]} 2>/dev/null || true   # or it would switch it back on
 sudo rm -f {GUARD} /etc/systemd/system/{GUARD_UNITS[0]} /etc/systemd/system/{GUARD_UNITS[1]}
 sudo rm -rf {SAVED}

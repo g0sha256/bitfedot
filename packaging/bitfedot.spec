@@ -1,5 +1,5 @@
 Name:           bitfedot
-Version:        0.3.3
+Version:        0.3.4
 Release:        1%{?dist}
 Summary:        A complete, private, hardened Bitcoin node for Fedora
 License:        Unlicense

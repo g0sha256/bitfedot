@@ -194,6 +194,10 @@ class HardwareKeysPage(Gtk.Box):
             icon = Gtk.Image(icon_name="dialog-warning-symbolic")
             icon.add_css_class("error" if severity == "critical" else "warning")
             row.add_prefix(icon)
+            if text.endswith(hk.REPAIR_HINT):
+                fix = Gtk.Button(label="Repair", valign=Gtk.Align.CENTER)
+                fix.connect("clicked", lambda *_: self._run("repair", lambda: hk.repair_script(self.facts["user"])))
+                row.add_suffix(fix)
             self.g_health.add(row)
             self.health_rows.append(row)
         self.g_health.set_visible(bool(problems))

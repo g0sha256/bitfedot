@@ -1032,6 +1032,7 @@ class HardwareKeys(unittest.TestCase):
             "keyring-unencrypted": hk.keyring_script(encrypted=False),
             "finalize": hk.finalize_script(self.DEVS, "fedora", recovery_key=True),
             "revert": hk.revert_script(self.DEVS, "fedora"),
+            "repair": hk.repair_script("fedora"),
         }
 
     def test_every_script_is_valid_shell(self):
@@ -1047,8 +1048,10 @@ class HardwareKeys(unittest.TestCase):
     def test_only_the_final_script_removes_anything(self):
         s = self.scripts()
         for name, text in s.items():
-            destructive = "--wipe-slot=password" in text or "passwd -l" in text
-            self.assertEqual(destructive, name == "finalize", name)
+            self.assertEqual("--wipe-slot=password" in text, name == "finalize", name)
+            # the login password goes in the final step only; Repair keeps a removed one removed
+            self.assertEqual("sudo usermod -p '*'" in text, name in ("finalize", "repair"), name)
+            self.assertNotIn("passwd -l", text, name)       # "locked" hides the user from the login screen
         self.assertIn(hk.CONFIRM_PHRASE, s["finalize"])
         self.assertIn("--recovery-key", s["finalize"])
         bare = hk.finalize_script(self.DEVS, "fedora", recovery_key=False)
@@ -1062,7 +1065,7 @@ class HardwareKeys(unittest.TestCase):
         for mode in ("pgp-clone", "pgp-separate"):                 # gpgconf lists it even when it is missing
             self.assertIn('[ -x "$(gpgconf --list-dirs libexecdir)/scdaemon" ] || missing+=(gnupg2-scdaemon)', s[mode])
         for name, text in s.items():                               # every step installs its own tools
-            self.assertEqual("\nneed_tools\n" in text, name.split("-")[0] not in ("revert", "keyring"), name)
+            self.assertEqual("\nneed_tools\n" in text, name.split("-")[0] not in ("revert", "keyring", "repair"), name)
 
     def test_password_removal_is_gated_on_both_keys(self):
         hw = {"main": "111111", "backup": "222222", "disk": True, "keyring": True,
@@ -1145,7 +1148,7 @@ class HardwareKeys(unittest.TestCase):
     def test_steps_count_as_done_only_when_their_script_finished(self):
         s = self.scripts()
         self.assertLess(s["disk"].index("sudo dracut --force"), s["disk"].index('touch "$STATE/hwkey-disk.done"'))
-        self.assertLess(s["finalize"].index("passwd -l"), s["finalize"].index('touch "$STATE/hwkey-final.done"'))
+        self.assertLess(s["finalize"].index("sudo usermod -p '*'"), s["finalize"].index('touch "$STATE/hwkey-final.done"'))
         paths.ensure_dirs()
         marker = paths.CONFIG_DIR / "hwkey-disk.done"
         marker.unlink(missing_ok=True)
@@ -1210,6 +1213,31 @@ class HardwareKeys(unittest.TestCase):
         hw = {"main": "111111", "backup": "222222", "disk": False}
         locked_out = hk.health({"password_locked": True, "pam_u2f": False}, hw)
         self.assertTrue(any(sev == "critical" and "locked" in text for sev, text in locked_out))
+
+    def test_a_removed_password_does_not_hide_the_user_from_the_login_screen(self):
+        """`passwd -l` made the account "locked", and the login screen lists no locked account: after
+        the first restart it asked for a user name. Found six days late, on the first restart."""
+        s = self.scripts()
+        self.assertIn(hk.REMOVED, s["finalize"])                    # the guard is told, and keeps it so
+        self.assertIn("usermod -p '*' \"$user\"", hk.GUARD_TEXT)
+        self.assertIn("grep -q '^!'", hk.GUARD_TEXT)                 # only a locked one is touched
+        self.assertIn("PathChanged=/etc/shadow", hk.GUARD_PATH_TEXT)
+        self.assertIn("Before=display-manager.service", hk.GUARD_SERVICE_TEXT)
+        self.assertIn("authselect apply-changes", hk.GUARD_TEXT.split(hk.PAM_STACK)[1])
+        hw = {"main": "111111", "backup": "222222"}
+        base = {"password_locked": True, "pam_u2f": True, "pam_wired": True, "hidden_at_login": False}
+        self.assertEqual(hk.health(base, hw), [])
+        hidden = hk.health({**base, "hidden_at_login": True}, hw)
+        self.assertTrue(hidden and hidden[0][1].endswith(hk.REPAIR_HINT))
+        unwired = hk.health({**base, "pam_wired": False}, hw)
+        self.assertEqual(unwired[0][0], "critical")
+        self.assertEqual(hk.health({**base, "hidden_at_login": None}, hw), [])   # no answer is not a finding
+        # undoing it is the one place a password comes back, and it is asked for before anything is removed
+        revert = s["revert"]
+        self.assertLess(revert.index("sudo passwd fedora"), revert.index("authselect disable-feature"))
+        self.assertNotIn("passwd ", s["repair"].replace("passwd -S", ""))        # Repair never sets one
+        with self.assertRaises(ValueError):
+            hk.repair_script("fedora; rm -rf /")
 
     def test_boot_asks_once(self):
         """One PIN, one touch: graphical screen, volumes in sequence, extra volumes PIN-only."""

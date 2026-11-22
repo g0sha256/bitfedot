@@ -339,7 +339,7 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
   order of stops, files replaced only once their readers were down, a service that would not
   stop, the applying process killed in the middle — and both of those finished afterwards —
   and stopping everything while one service has no unit;
-- 160 offline unit tests.
+- 161 offline unit tests.
 
 **Not yet verified end to end:** Fulcrum's first index through to its end, and a wallet connecting
 to it (the one computer that has got this far was at 80 % when 0.3.0 was tagged); updates across
@@ -347,6 +347,7 @@ real version bumps; what the firewall zone and the kill switch actually block; R
 installs and Fedora updates run from the app (development had no root);
 an actual self-update of an installed copy, downloaded from a published release (it has been
 rehearsed in a scratch folder only);
+the hardware-key *Repair* step on more than the one computer it was run on, the extended guard actually having to repair something, the new form of the final step from start to finish, and the hardware-key setup across a Fedora release upgrade;
 the hardware-key setup on anything other than the one computer it was run on end to end
 (two YubiKey 5C NFC, system on two encrypted volumes);
 the reworked keyring step from start to finish on a login keyring (its logic has been run against
