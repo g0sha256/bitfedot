@@ -193,7 +193,7 @@ class SettingsPage(Gtk.Box):
             if key == "linger":
                 system.set_linger(value)
             if key == "autostart":
-                services.write_configs(s)
+                services.write_autostart(s)
         run_async(work, None, lambda e: toast(self, error_text(e)))
 
     def _never_sleep(self, enable):
@@ -242,9 +242,8 @@ class SettingsPage(Gtk.Box):
         if self.demo:
             return toast(self, "Demo mode — nothing is running")
         toast(self, "Stopping services — Bitcoin Core may take a few minutes to flush…")
-
-        def work():
-            s = settings.update(installed=False)
-            services.remove_all(s)
         self.get_root().app.poll_now()
-        run_async(work, lambda _r: self.get_root().show_wizard(), lambda e: toast(self, error_text(e)))
+        # The node counts as removed only once everything has stopped; if a service
+        # will not stop, it stays installed and the agent brings it back up.
+        run_async(services.remove_all, lambda _r: self.get_root().show_wizard(),
+                  lambda e: (toast(self, error_text(e)), self.get_root().app.poll_now()))

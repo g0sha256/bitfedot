@@ -52,6 +52,7 @@ TOR_DIR = DATA_DIR / "tor"
 TORRC = CONFIG_DIR / "torrc"
 APPLY_LOCK = CONFIG_DIR / ".apply.lock"      # held while services are being reconfigured
 ACTIVITY_FILE = CONFIG_DIR / ".activity"     # what that reconfiguration is doing right now
+APPLY_PENDING = CONFIG_DIR / ".apply.pending"   # a reconfiguration began and has not completed
 DESKTOP_DIR = (Path(_root) / "applications") if _root else _data / "applications"
 MEMPOOL_DIR = DATA_DIR / "mempool"
 

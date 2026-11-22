@@ -22,16 +22,23 @@ class Wizard(Adw.Bin):
     # -------------------------------------------------------------- adopt --
     def _adopt(self):
         """Shown instead of the welcome page when a pre-release ("Nodestead")
-        install exists: offer to carry it over instead of installing again."""
+        install exists: offer to carry it over instead of installing again. Also
+        shown when that move was begun and has not been finished (migrate.pending())."""
+        resuming = settings.load()["adopting"]
         status = Adw.StatusPage(
             icon_name="io.github.g0sha256.BitFedot",
             title="Your node is now called BitFedot",
-            description="An existing Nodestead installation was found on this computer.\n"
+            description="Moving your Nodestead installation to BitFedot was begun and not finished.\n"
+                        "Nothing is lost: its folders are in place under their new names. What is "
+                        "left is to set up the services and start the node."
+                        if resuming else
+                        "An existing Nodestead installation was found on this computer.\n"
                         "BitFedot can take it over as it is: the services are stopped safely, the "
                         "folders are renamed — nothing is copied or downloaded again, and all sync "
                         "progress is kept — and the node starts again right away.")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, halign=Gtk.Align.CENTER)
-        self.adopt_btn = Gtk.Button(label="Move my node to BitFedot", halign=Gtk.Align.CENTER)
+        self.adopt_btn = Gtk.Button(label="Finish the move" if resuming else "Move my node to BitFedot",
+                                    halign=Gtk.Align.CENTER)
         for c in ("pill", "suggested-action"):
             self.adopt_btn.add_css_class(c)
         self.adopt_btn.connect("clicked", lambda *_: self._run_adopt())

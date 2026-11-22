@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.3.2 — 2026-11-22
+
+### Fixed
+The first four were reported in [#1](https://github.com/G0SHA256/bitfedot/issues/1) and
+reproduced before they were fixed.
+
+- A change that was cut short could leave a service on its old configuration for good. Files
+  were written first and services restarted afterwards; when that was interrupted — the app
+  closed or the computer switched off in the middle, a service that did not stop — the next
+  attempt found the files up to date and restarted nothing, while the app showed the new
+  setting (for instance *Tor only*) as in effect. A file is now replaced only once whatever
+  reads it has been stopped, and a change that did not complete is recorded and finished: by
+  the background agent on its next round, when the app is opened, or with *Finish now* in the
+  banner that says so. The same goes for the restart that is owed after an update.
+- What systemd refused went unnoticed. A service that does not stop now ends the change there,
+  before any file is replaced and with nothing it depends on taken down under it; anything
+  else that is refused is reported once the rest has been done. When systemd does not answer
+  at all, that is an error and no longer read as "nothing is running".
+- A change could be undone by an older copy of the settings: the agent, following the VPN,
+  applied the settings as it had read them a moment earlier — over a change the app had saved
+  and applied in between. The settings are now read at the moment they are applied, under the
+  same lock.
+- Adopting a pre-release ("Nodestead") install could strand it half-moved: the configuration
+  was moved first and the data second, and when the second move failed the old install was
+  no longer found — while BitFedot took what it had for a working node. Now both destinations
+  are checked before anything is stopped, nothing is moved while an old service still runs,
+  the data moves first and the configuration last, and wherever it stops, running it again
+  finishes it. Folders are only ever renamed, never copied; what is left of downloads in
+  BitFedot's own folder is no longer in the way.
+- Updates → *Stop services and restart*: if a service does not stop, the restart of the
+  computer is called off, and if the computer does not restart after all, the node is started
+  again — it used to stay down. Settings → *Remove services* removes nothing unless
+  everything has stopped.
+- *Restart* and *Tor: reconnect* are refused while a change is being applied, instead of
+  starting a service on files that are about to be replaced.
+- Settings → *Start BitFedot at login* rewrote every service's configuration without
+  restarting anything; it now writes the autostart entry only.
+
+### Added
+- `tools/apply-rehearsal.py` runs these cases — the order of stops, a service that will not
+  stop, the applying process killed in the middle, stopping everything while a service has
+  no unit (Mempool, while it is switched off), removal — against the real systemd, with
+  throw-away units that only sleep in place of the services. It never touches a `bitfedot-*`
+  unit and is safe to run beside a running node.
+
 ## 0.3.1 — 2026-11-17
 
 ### Added

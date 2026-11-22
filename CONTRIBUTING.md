@@ -36,8 +36,9 @@ invariants; [`docs/EXTENDING.md`](docs/EXTENDING.md) has recipes for the common 
    get extra review.
 3. **Root is opt-in.** Nothing runs as root unless the user flipped a switch for exactly that.
    Prefer a solution that works in the user session.
-4. **One way to change the system.** Change settings, call `services.apply()`. Do not start,
-   stop or write units from UI code.
+4. **One way to change the system.** Change settings, call `services.apply()` (it reads the
+   stored settings itself — never pass it a copy). Do not start, stop or write units from UI
+   code.
 5. **UI modules contain no logic.** A page reads the snapshot in `update()` and calls a function
    in a backend module from a worker thread (`run_async`). If you need a decision, put it in
    the backend where it can be unit-tested.

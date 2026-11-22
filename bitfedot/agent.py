@@ -7,6 +7,8 @@ window is closed:
     meaningful the moment the window opens;
   * when the initial sync finishes, switches to the full-service profile and
     launches Tor, Fulcrum and Mempool;
+  * finishes a change to the services that was cut short — the app was closed or
+    the computer switched off in the middle of it, or a service would not stop;
   * keeps the computer from going to sleep while the node is meant to run (a
     sleeping computer does not sync);
   * in "Tor via VPN" mode, follows the VPN interface: Tor is stopped while the
@@ -24,6 +26,7 @@ TICK = 20
 DAY = 86400
 AWAKE_WHY = "The Bitcoin node is running"
 AWAKE_RETRY = 120       # seconds between attempts while the lock is refused (nobody logged in)
+FINISH_RETRY = 300      # seconds between attempts to finish a change that keeps failing
 
 
 def sync_complete(s) -> bool:
@@ -79,6 +82,33 @@ def keep_awake(s, state):
         state["awake_next"] = time.monotonic() + AWAKE_RETRY
 
 
+def finish_unfinished(state, announce_failure=True):
+    """Carry out a change to the services that began and did not complete
+    (services.unfinished()): apply() goes on from where things stand. While it keeps
+    failing it is tried again every FINISH_RETRY seconds, and each new reason is
+    announced once."""
+    if not services.unfinished():
+        state.pop("finish_next", None)
+        state.pop("finish_error", None)
+        return
+    if time.monotonic() < state.get("finish_next", 0):
+        return
+    state["finish_next"] = time.monotonic() + FINISH_RETRY
+    print("agent: finishing a change that was not completed", flush=True)
+    try:
+        services.apply()
+    except Exception as e:          # it stays unfinished; the rest of the tick must still happen
+        print(f"agent: not finished: {type(e).__name__}: {e}", flush=True)
+        if str(e) != state.get("finish_error"):
+            state["finish_error"] = str(e)
+            if announce_failure:
+                system.notify("A change to your node is not complete", str(e)[:300])
+    else:
+        print("agent: the change is complete", flush=True)
+        state.pop("finish_next", None)
+        state.pop("finish_error", None)
+
+
 def tick(state: dict):
     s = settings.load()
     try:
@@ -87,6 +117,7 @@ def tick(state: dict):
         print(f"agent: keep awake: {e}", flush=True)
     if not s["installed"]:
         return
+    finish_unfinished(state, s["status_notifications"])     # also when everything is meant to be stopped
     if s["all_stopped"]:
         return
     if s["phase"] == "ibd" and s["bitcoind_enabled"] and sync_complete(s):
@@ -107,7 +138,7 @@ def tick(state: dict):
                               f"VPN {s['vpn_iface']} is back — Tor reconnecting through it." if any(addrs)
                               else f"VPN {s['vpn_iface']} is down — Tor stopped (no clearnet fallback).")
             state["vpn"] = addrs
-            services.apply(s)
+            services.apply()
 
     if s["status_notifications"]:
         try:

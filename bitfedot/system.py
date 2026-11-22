@@ -37,13 +37,20 @@ def systemctl(*args, check=False, timeout=120):
 
 
 def unit_states(units) -> dict:
-    """unit -> 'active' | 'activating' | 'deactivating' | 'failed' | 'inactive'"""
+    """unit -> 'active' | 'activating' | 'deactivating' | 'failed' | 'inactive' (a unit
+    systemd does not know is 'inactive').
+
+    Raises RuntimeError when systemd does not answer for every unit: what is decided
+    from this is what may be reconfigured, so "nothing is running" must never be a guess."""
     units = list(units)
     if DRY_RUN:
         return {u: "inactive" for u in units}
-    out = run(["systemctl", "--user", "is-active", *units], timeout=15).stdout.split("\n")
-    return {u: (out[i].strip() if i < len(out) and out[i].strip() else "inactive")
-            for i, u in enumerate(units)}
+    p = run(["systemctl", "--user", "is-active", *units], timeout=15)
+    out = [line.strip() for line in p.stdout.splitlines() if line.strip()]
+    if len(out) != len(units):
+        why = (p.stderr or "").strip().splitlines()
+        raise RuntimeError("systemd did not say what is running" + (f" ({why[-1]})" if why else ""))
+    return dict(zip(units, out))
 
 
 def _parse_units(text: str, units) -> dict:

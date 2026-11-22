@@ -1,7 +1,7 @@
 """Main window: sidebar navigation + pages, or the first-run wizard."""
 from gi.repository import Adw, Gio, Gtk
 
-from .. import __version__, net, paths
+from .. import __version__, net, node, paths
 from .about import AboutPage
 from .apps import AppsPage
 from .connectivity import ConnectivityPage
@@ -11,7 +11,7 @@ from .overview import OverviewPage
 from .pages import LogsPage, SettingsPage
 from .security import SecurityPage
 from .updates import UpdatesPage
-from .widgets import label
+from .widgets import error_text, label, run_async
 from .wizard import Wizard
 
 
@@ -70,8 +70,10 @@ class MainWindow(Adw.ApplicationWindow):
         content_header = Adw.HeaderBar(title_widget=self.content_title)
         content = Adw.ToolbarView(content=self.stack)
         content.add_top_bar(content_header)
-        # Shows what a running reconfiguration is doing (stopping/starting services).
+        # Shows what a running reconfiguration is doing (stopping/starting services), or
+        # that one was cut short — then with a button that finishes it.
         self.activity = Adw.Banner(revealed=False)
+        self.activity.connect("button-clicked", lambda _b: self._finish_pending())
         content.add_top_bar(self.activity)
 
         self.split = Adw.NavigationSplitView(
@@ -114,6 +116,14 @@ class MainWindow(Adw.ApplicationWindow):
             self.toast("Installed — your node is syncing")
             self.app.poll_now()
 
+    def _finish_pending(self):
+        """The banner's button: carry out the change that was cut short."""
+        self.activity.set_button_label(None)
+        self.app.poll_now()
+        run_async(node.apply_settings,
+                  lambda _r: (self.toast("Done — the change is complete"), self.app.poll_now()),
+                  lambda e: (self.toast(error_text(e)), self.app.poll_now()))
+
     # ----------------------------------------------------------- snapshot --
     def update(self, snap):
         if not snap["installed"]:
@@ -124,9 +134,11 @@ class MainWindow(Adw.ApplicationWindow):
                 self.wizard.nav.get_visible_page().get_tag() != "progress":
             self.show_main()
         activity = snap.get("activity") or ""
-        if activity:
-            self.activity.set_title(activity)
-        self.activity.set_revealed(bool(activity))
+        pending = "" if activity else (snap.get("pending") or "")
+        if activity or pending:
+            self.activity.set_title(activity or pending)
+        self.activity.set_button_label("Finish now" if pending else None)
+        self.activity.set_revealed(bool(activity or pending))
         for page in self.pages:
             page.update(snap)
         own = snap["settings"].get("available", {}).get("bitfedot", "")

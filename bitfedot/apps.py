@@ -66,7 +66,7 @@ def _write_desktop_entry(app: App, root: Path):
     """Menu entry for a per-user install, so the app is found like any other."""
     exe = root / app.spec["exec"]
     args = " ".join(app.spec.get("exec_args", ()))
-    services._write(_desktop_file(app), f"""[Desktop Entry]
+    services.write_file(_desktop_file(app), f"""[Desktop Entry]
 Type=Application
 Name={app.title}
 Comment={app.summary}
@@ -537,7 +537,7 @@ def configure_sparrow():
         if not backup.exists():
             shutil.copy2(cfg_file, backup)
     config.update(sparrow_settings())
-    services._write(cfg_file, json.dumps(config, indent=2) + "\n")
+    services.write_file(cfg_file, json.dumps(config, indent=2) + "\n")
 
 
 CONFIGURE = {"sparrow": configure_sparrow}      # catalog spec["configure"] -> function

@@ -19,26 +19,59 @@ The GUI and the agent never talk to each other directly. They share
 ## The one rule: settings → `apply()`
 
 ```
-settings.json ──► services.write_configs() ──► bitcoin.conf, torrc, fulcrum.conf,
-                                               *.service, Quadlet files
+settings.json ──► services.config_files() ───► bitcoin.conf, torrc, fulcrum.conf,
+                                               *.service, Quadlet files (rendered)
               ──► services.desired_units() ──► {unit: should it run?}
-              ──► services.apply() ──────────► ordered stop → ordered start
+              ──► services.apply() ──────────► ordered stop → write → ordered start
 ```
 
-`apply(settings, restart=())`:
+`apply(restart=())`, holding its lock:
 
-1. writes every file and notes which units' configuration changed;
-2. works out what has to go down — unwanted units, changed units, and everything that
+1. reads the stored settings — itself, and there: whoever gets the lock applies the latest
+   ones, and a copy someone read earlier can never be applied later;
+2. renders every file and compares it with the one on disk. A unit whose file differs is
+   stale, and so is one listed in `restart` (after a binary upgrade);
+3. works out what has to go down — unwanted units, stale units, and everything that
    depends on a unit that restarts (`DEPENDENTS`);
-3. stops those in `STOP_ORDER` (Mempool → Fulcrum → Bitcoin Core → Tor), **blocking**
-   on each so Bitcoin Core can flush its cache and Fulcrum can close its database;
-4. starts everything that should run, in reverse order;
-5. publishes what it is doing to `~/.config/bitfedot/.activity`, which both the GUI banner and
+4. stops those in `STOP_ORDER` (Mempool → Fulcrum → Bitcoin Core → Tor), **blocking**
+   on each so Bitcoin Core can flush its cache and Fulcrum can close its database. If one
+   does not stop, `apply()` ends there with an error — nothing it depends on is taken down
+   under it;
+5. only now writes the files, when nothing that reads them is running, and has systemd load
+   them;
+6. starts everything that should run, in reverse order, and then reports whatever systemd
+   refused;
+7. publishes what it is doing to `~/.config/bitfedot/.activity`, which both the GUI banner and
    other processes read.
 
 Because it is idempotent, every feature reduces to "change a setting, call `apply()`":
 stopping one service, *Stop all*, *Shut down the node*, switching network mode, toggling the
 sandbox, finishing the initial sync, updating a binary (`restart=[unit]`).
+
+### When it does not get to the end
+
+A file is replaced only after its reader has stopped, so a running service always matches the
+file on disk — however an `apply()` ends: a service that will not stop, the app closed, the
+power gone. The next `apply()` therefore sees from the files what is left to do. Two things the
+files cannot show are written down before anything is touched, in
+`~/.config/bitfedot/.apply.pending`: that an `apply()` is under way at all, and restarts that
+are owed for another reason than a changed file (a new binary). The record goes when an
+`apply()` completes.
+
+While the record exists and no `apply()` is running, `services.unfinished()` is true. The agent
+then runs `apply()` again — within its next round, and every few minutes for as long as it
+keeps failing — the app does the same when it is opened, and its banner says that a change was
+not completed and offers *Finish now*. *Stop services and restart* (before a reboot) and
+*Remove services* use the same record: if a service does not stop, or the computer does
+not restart after all, the node is brought back. Both ask only what is running to stop:
+systemd answers with an error for a unit it does not have — Mempool's, while Mempool is
+switched off — and that is not a service that will not stop. For the same reason every
+`systemctl` call names one unit; a call that names several does nothing for any of them
+when one is missing.
+
+"Restart" and "Tor: reconnect" (`services.restart_unit()`) take the same lock without waiting.
+In the middle of an `apply()` they are refused, rather than start a service on files that are
+about to be replaced.
 
 ## Life cycle of a node
 

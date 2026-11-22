@@ -46,7 +46,7 @@ every file it manages is generated from one settings file by one function.
 | **Verified apps** | Optional, each checked against its developers' pinned key on install *and* update: **Sparrow** (pre-wired to your node) · **Mullvad VPN**, **Obscura VPN** · **Tor Browser**, **Mullvad Browser**, **LibreWolf** · **Element**, **SimpleX**. |
 | **Fedora hardening** | Security check-up (SELinux, firewall, LUKS, Secure Boot…), systemd sandbox for every service, strict firewalld zone, system-wide **VPN kill switch** (nftables), private transaction broadcast. |
 | **Hardware keys** *(experimental)* | Move disk encryption, login, sudo, the desktop keyring and release signing onto two YubiKeys — a main key and a backup — and then remove the password altogether. One PIN and one touch at boot. Run end to end on one computer so far; details [below](#hardware-keys-experimental). |
-| **Safe by construction** | Any change that needs a restart stops services dependents-first and waits for clean shutdowns (Mempool → Fulcrum → Bitcoin Core → Tor), then starts them in reverse. Stop/start one or all; quitting asks: *run in background* or *shut down safely*. |
+| **Safe by construction** | Any change that needs a restart stops services dependents-first and waits for clean shutdowns (Mempool → Fulcrum → Bitcoin Core → Tor), then starts them in reverse. A configuration file is replaced only once whatever reads it has stopped, and a change that is cut short — the app closed, the power gone, a service that will not stop — is finished afterwards by the background agent. Stop/start one or all; quitting asks: *run in background*, *quit* (the node keeps running) or *shut down the node*. |
 | **Updates** | Node software, apps, Fedora *and BitFedot itself*: check (through Tor when it is up), download, verify, install, restart. BitFedot installs its own update only from a release signed with the key it already carries, tests it first, and keeps the previous version for one-click rollback. |
 | **Keeps you posted** | Live status for every service — sync percentage, Fulcrum's index progress, the explorer catching up — in the app and tray, plus optional desktop notifications at milestones. |
 | **Stays awake** | A sleeping computer does not sync. While services run, BitFedot holds a lock that stops the computer from going to sleep, by itself or on request; the screen still switches off and locks. A second switch turns sleep off for the whole computer, for when nobody is logged in. |
@@ -181,7 +181,10 @@ flowchart LR
 
 - **One source of truth.** `~/.config/bitfedot/settings.json` → [`services.py`](bitfedot/services.py)
   renders every config file and unit. `apply()` is idempotent, ordered and locked, and is the
-  only code that starts or stops anything.
+  only code that starts or stops anything. It reads the settings itself once it holds the lock,
+  replaces a file only after stopping what reads it, and says so when systemd refuses something;
+  a change that did not complete is recorded and finished later
+  ([how](docs/ARCHITECTURE.md#when-it-does-not-get-to-the-end)).
 - **Everything is a systemd user service.** `systemctl --user status 'bitfedot-*'` and
   `journalctl --user -u bitfedot-bitcoind` work as you would expect; the Logs page shows the same.
 - **Loopback only.** Every service binds to `127.0.0.1`. The single exception is Bitcoin's P2P
@@ -328,7 +331,12 @@ On Fedora 45 (GNOME, Wayland, SELinux enforcing), against the real upstreams:
 - the administrator-level switches on that computer, turned on from the app: the strict firewall
   zone and the VPN kill switch are loaded, and with *Never sleep* the login manager reports
   suspend as unavailable (what the first two block has not been probed);
-- 121 offline unit tests.
+- applying changes against the real systemd, with throw-away units that only sleep in place of
+  the services (`tools/apply-rehearsal.py`, 40 checks, safe to run beside a running node): the
+  order of stops, files replaced only once their readers were down, a service that would not
+  stop, the applying process killed in the middle — and both of those finished afterwards —
+  and stopping everything while one service has no unit;
+- 159 offline unit tests.
 
 **Not yet verified end to end:** Fulcrum's first index through to its end, and a wallet connecting
 to it (the one computer that has got this far was at 80 % when 0.3.0 was tagged); updates across
@@ -343,6 +351,8 @@ step checks itself by restarting the keyring service, which is not quite the sam
 a computer with a TPM chip; a login with a typed password after the keyring step (expected to
 leave the keyring shut — the keyring service prefers the typed password to the stored one);
 the notification for a service that keeps crashing, against real crashing units;
+a change that was cut short being finished on a real node (so far: stand-in units, see above);
+adopting a pre-release install that was interrupted half-way (unit tests only);
 the optional apps actually *launching*; the sync estimate over a complete sync; the tray icon
 under the GNOME extension and KDE. Reports are very welcome.
 

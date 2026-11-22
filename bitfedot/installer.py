@@ -276,8 +276,8 @@ def run_install(options: dict, step) -> dict:
                 system.set_linger(True)
             except RuntimeError:
                 pass   # not fatal: node simply stops at logout
-        final = settings.update(installed=True, phase="ibd", all_stopped=False)
-        services.apply(final, report=report)
+        settings.update(installed=True, phase="ibd", all_stopped=False)
+        services.apply(report=report)
     stage("configure", configure)
     return results
 
@@ -314,19 +314,19 @@ def update_component(name: str, report=_noop) -> dict:
     tor = _use_tor(s)
     if name == "bitcoin":
         res = install_bitcoin(report=report, use_tor=tor)
-        services.apply(settings.load(), restart=[U_BITCOIND], report=report)
+        services.apply(restart=[U_BITCOIND], report=report)
     elif name == "fulcrum":
         res = install_fulcrum(report=report, use_tor=tor)
-        services.apply(settings.load(), restart=[U_FULCRUM], report=report)
+        services.apply(restart=[U_FULCRUM], report=report)
     elif name == "mempool":
         res = install_mempool(report=report, use_tor=tor)
-        services.apply(settings.load(), restart=[U_MEMPOOL], report=report)
+        services.apply(restart=[U_MEMPOOL], report=report)
     elif name == "tor":
         report("Updating Tor (authentication required)…")
         pkexec_dnf("upgrade", "-y", "tor")
         v = installed_tor_version()
         settings.update(versions={"tor": v})
-        services.apply(settings.load(), restart=[U_TOR], report=report)
+        services.apply(restart=[U_TOR], report=report)
         res = {"version": v, "signers": ["RPM signature verified by dnf (Fedora key)"]}
     elif name in BY_ID:
         from . import apps

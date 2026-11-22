@@ -62,9 +62,13 @@ migration) · `widgets.py` (helpers: `run_async`, `toast`, formatting). `app.py`
 1. **Verify, then run.** Nothing downloaded is unpacked, installed or executed before
    `verify.py` accepts it against a key pinned in this repository. This includes BitFedot's own
    updates: never add an unsigned or "TLS is enough" path to `selfupdate.py`.
-2. **One way to change the system:** update settings, then `services.apply(settings)`.
+2. **One way to change the system:** update settings, then `services.apply()`.
    `apply()` is idempotent, ordered (stop consumers first, wait, start in reverse) and locked.
-   Never start/stop/write units elsewhere.
+   It reads the stored settings itself, under its lock — never hand it a copy. It replaces a
+   file only after stopping what reads it, and raises when systemd refuses something; an
+   apply that did not complete stays `services.unfinished()` and is finished by the agent or
+   at the next launch. Never start/stop/write units elsewhere (a plain restart is
+   `services.restart_unit()`).
 3. **Root only on request,** only through `hardening.as_root()`, with every interpolated value
    validated (see `_IFACE`, `_ZONE`, `parse_endpoints`). No new privileged code paths without a
    test for hostile input.
@@ -101,6 +105,7 @@ migration) · `widgets.py` (helpers: `run_async`, `toast`, formatting). `app.py`
 | Change the sync estimate | constants at the top of `eta.py` → §6 |
 | Cut a release / pin a new Mempool version | `docs/RELEASING.md`, `tools/release.sh`, `pins.py` |
 | Check a change to the keyring stage for real | `python3 -P tools/keyring-rehearsal.py` — the real keyring service and `systemd-creds`, on throw-away keyrings; never the login keyring. The unit tests only know a fake service |
+| Check a change to `services.apply()` for real | `python3 -P tools/apply-rehearsal.py` — the real `systemctl --user`, with throw-away units that only sleep in place of the services; never a `bitfedot-*` unit, so it is safe beside a running node. The unit tests only know a fake systemd |
 
 ## Known gaps (good places to help)
 

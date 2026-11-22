@@ -5,6 +5,7 @@ verification, explorer helpers and migration. No network, no systemd, no root.
 """
 import base64
 import contextlib
+import errno
 import http.client
 import io
 import json
@@ -29,8 +30,80 @@ from bitfedot.paths import U_BITCOIND, U_FULCRUM, U_MEMPOOL, U_TOR  # noqa: E402
 
 
 def cfg(**kw):
-    s = settings.ensure_secrets()
-    return {**settings.DEFAULTS, **s, "installed": True, "versions": {"mempool": "3.3.2"}, **kw}
+    """Settings of an installed node with every switch at its default, plus `kw`. Not stored,
+    and — but for the generated passwords — not taken from what other tests stored."""
+    secrets = settings.ensure_secrets()["secrets"]
+    return {**settings.DEFAULTS, "secrets": secrets, "installed": True, "versions": {"mempool": "3.3.2"}, **kw}
+
+
+def store(**kw):
+    """Make the stored settings those of an installed node with every switch at its default,
+    plus `kw` — apply() reads what is stored, never what a caller holds."""
+    settings.ensure_secrets()
+    plain = {k: v for k, v in settings.DEFAULTS.items() if not isinstance(v, dict)}
+    return settings.update(**{**plain, "installed": True, "versions": {"mempool": "3.3.2"}, **kw})
+
+
+class Systemd:
+    """Stands in for `systemctl --user`: remembers what runs and records every call as
+    (verb, unit). `refuse` makes a call fail the way systemd says so, `die_at` ends the
+    process in the middle of one (the app closed, the power gone), `on` runs something
+    at that moment. A unit it does not have — neither running nor with a file — gets the
+    error the real one gives (noted from systemd 262, with a unit name nothing uses)."""
+
+    class Killed(BaseException):
+        pass
+
+    NOT_THERE = {"stop": (5, "Failed to stop {0}: Unit {0} not loaded."),
+                 "start": (5, "Failed to start {0}: Unit {0} not found."),
+                 "restart": (5, "Failed to restart {0}: Unit {0} not found."),
+                 "enable": (1, "Failed to enable unit: Unit {0} does not exist"),
+                 "disable": (1, "Failed to disable unit: Unit {0} does not exist"),
+                 "reset-failed": (1, "Failed to reset failed state of unit {0}: Unit {0} not loaded.")}
+
+    def __init__(self, running=()):
+        self.running, self.calls = set(running), []
+        self.refuse, self.die_at, self.on = {}, None, {}
+
+    def has(self, unit) -> bool:
+        """Mempool's unit is generated from its Quadlet files and goes when they go."""
+        if unit in self.running or (paths.UNIT_DIR / unit).exists():
+            return True
+        return unit == U_MEMPOOL and any(paths.QUADLET_DIR.glob("bitfedot-mempool*"))
+
+    def systemctl(self, *args, **_kw):
+        words = [a for a in args if not a.startswith("--")]
+        call = (words[0], words[1] if len(words) > 1 else "")
+        self.calls.append(call)
+        if call == self.die_at:
+            raise self.Killed(call)
+        self.on.get(call, lambda: None)()
+        if call in self.refuse:
+            code, said = self.refuse[call] if isinstance(self.refuse[call], tuple) else (1, self.refuse[call])
+            return subprocess.CompletedProcess(args, code, "", said)
+        if call[0] in self.NOT_THERE and not self.has(call[1]):
+            code, said = self.NOT_THERE[call[0]]
+            return subprocess.CompletedProcess(args, code, "", said.format(call[1]))
+        if call[0] == "stop" or (call[0] == "disable" and "--now" in args):
+            self.running.discard(call[1])
+        elif call[0] in ("start", "restart"):
+            self.running.add(call[1])
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def unit_states(self, units):
+        return {u: "active" if u in self.running else "inactive" for u in units}
+
+    def did(self, verb):
+        """The node's services `verb` was asked for, in order."""
+        return [unit for v, unit in self.calls if v == verb and unit in services.STOP_ORDER]
+
+    def __enter__(self):
+        self._patch = mock.patch.multiple(system, systemctl=self.systemctl, unit_states=self.unit_states)
+        self._patch.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self._patch.stop()
 
 
 class BitcoinConf(unittest.TestCase):
@@ -97,13 +170,20 @@ class Units(unittest.TestCase):
         self.assertFalse(d[U_TOR])
 
     def test_apply_is_idempotent(self):
-        s = cfg(phase="ready")
-        services.apply(s)
-        self.assertEqual(services.apply(s), set())
+        store(phase="ready")
+        services.apply()
+        self.assertEqual(services.apply(), set())
         self.assertTrue((paths.QUADLET_DIR / "bitfedot-mempool.pod").exists())
-        services.apply({**s, "mempool_enabled": False})
+        settings.update(mempool_enabled=False)
+        services.apply()
         self.assertFalse((paths.QUADLET_DIR / "bitfedot-mempool.pod").exists())
         self.assertEqual(services.activity(), "")
+        self.assertFalse(services.unfinished())
+
+    def test_apply_takes_no_settings(self):
+        """It reads them itself, under its lock. A caller's copy may be older than what is stored."""
+        with self.assertRaises(TypeError):
+            services.apply(cfg(phase="ready"))
 
     def test_torrc_onion_services(self):
         t = services.torrc(cfg(phase="ready", onion_fulcrum=True))
@@ -125,47 +205,438 @@ class Units(unittest.TestCase):
 class SafeOrdering(unittest.TestCase):
     """apply() must stop consumers before providers, wait, then start in reverse."""
 
-    def run_apply(self, s, running, restart=()):
-        calls = []
-
-        def fake_systemctl(*args, **_kw):
-            calls.append(args)
-        states = {u: ("active" if u in running else "inactive") for u in services.desired_units(s)}
-        with mock.patch.object(system, "systemctl", fake_systemctl), \
-                mock.patch.object(system, "unit_states", lambda units: states):
-            services.apply(s, restart=restart)
-        stops = [a[-1] for a in calls if a[0] == "stop"]
-        starts = [a[-1] for a in calls if "start" in a and a[-1] != paths.U_AGENT]
-        return stops, starts
+    def run_apply(self, running, restart=(), **changes):
+        with Systemd(running) as sd:
+            if changes:
+                settings.update(**changes)
+            services.apply(restart=restart)
+        return sd.did("stop"), sd.did("start")
 
     def setUp(self):
-        self.s = cfg(phase="ready")
-        services.apply(self.s)                       # files on disk match: no change pending
+        store(phase="ready")
+        services.apply()                             # files on disk match: no change pending
         self.all = {U_TOR, U_BITCOIND, U_FULCRUM, U_MEMPOOL}
 
     def test_no_change_touches_nothing(self):
-        self.assertEqual(self.run_apply(self.s, self.all), ([], []))
+        self.assertEqual(self.run_apply(self.all), ([], []))
 
     def test_bitcoind_restart_cycles_dependents_in_order(self):
-        stops, starts = self.run_apply(self.s, self.all, restart=[U_BITCOIND])
+        stops, starts = self.run_apply(self.all, restart=[U_BITCOIND])
         self.assertEqual(stops, [U_MEMPOOL, U_FULCRUM, U_BITCOIND])
         self.assertEqual(starts, [U_BITCOIND, U_FULCRUM, U_MEMPOOL])
 
     def test_tor_restart_leaves_the_rest_alone(self):
-        stops, starts = self.run_apply(self.s, self.all, restart=[U_TOR])
+        stops, starts = self.run_apply(self.all, restart=[U_TOR])
         self.assertEqual((stops, starts), ([U_TOR], [U_TOR]))
 
     def test_stop_all_then_start_all(self):
-        stops, starts = self.run_apply({**self.s, "all_stopped": True}, self.all)
+        stops, starts = self.run_apply(self.all, all_stopped=True)
         self.assertEqual(stops, [U_MEMPOOL, U_FULCRUM, U_BITCOIND, U_TOR])
         self.assertEqual(starts, [])
-        stops, starts = self.run_apply(self.s, set())
+        stops, starts = self.run_apply(set(), all_stopped=False)
         self.assertEqual(stops, [])
         self.assertEqual(starts, [U_TOR, U_BITCOIND, U_FULCRUM, U_MEMPOOL])
 
     def test_stopping_bitcoind_takes_dependents_down_first(self):
-        stops, _ = self.run_apply({**self.s, "bitcoind_enabled": False}, self.all)
+        stops, _ = self.run_apply(self.all, bitcoind_enabled=False)
         self.assertEqual(stops, [U_MEMPOOL, U_FULCRUM, U_BITCOIND])
+
+    def test_a_file_is_replaced_only_once_its_reader_is_down(self):
+        """However an apply ends, what runs must match what is on disk."""
+        seen = {}
+        with Systemd(self.all) as sd:
+            sd.on[("stop", U_BITCOIND)] = lambda: seen.update(at_stop=paths.BITCOIN_CONF.read_text())
+            sd.on[("start", U_BITCOIND)] = lambda: seen.update(at_start=paths.BITCOIN_CONF.read_text())
+            node.apply_settings(net_mode="tor_only")
+        self.assertNotIn("onlynet=onion", seen["at_stop"])
+        self.assertIn("onlynet=onion", seen["at_start"])
+
+
+class CutShort(unittest.TestCase):
+    """A change that is interrupted — the app closed, the power gone — must leave nothing
+    running on other configuration than the files hold, and must still be carried out."""
+
+    def setUp(self):
+        self.all = {U_TOR, U_BITCOIND, U_FULCRUM, U_MEMPOOL}
+        store(phase="ready", net_mode="dual")
+        services.apply()
+        self.addCleanup(paths.APPLY_PENDING.unlink, missing_ok=True)
+
+    def test_while_services_were_being_stopped(self):
+        before = paths.BITCOIN_CONF.read_text()
+        with Systemd(self.all) as sd:
+            sd.die_at = ("stop", U_FULCRUM)
+            with self.assertRaises(Systemd.Killed):
+                node.apply_settings(net_mode="tor_only")
+            self.assertEqual(paths.BITCOIN_CONF.read_text(), before)    # Bitcoin Core still runs — on this file
+            self.assertIn(U_BITCOIND, sd.running)
+            self.assertTrue(services.unfinished())
+            sd.die_at, sd.calls = None, []
+            services.apply()                                            # whoever comes next: the agent, the app
+            self.assertEqual(sd.did("stop"), [U_FULCRUM, U_BITCOIND])
+            self.assertEqual(sd.did("start"), [U_BITCOIND, U_FULCRUM, U_MEMPOOL])
+        self.assertIn("onlynet=onion", paths.BITCOIN_CONF.read_text())
+        self.assertFalse(services.unfinished())
+
+    def test_after_the_files_were_written(self):
+        with Systemd(self.all) as sd:
+            sd.die_at = ("daemon-reload", "")
+            with self.assertRaises(Systemd.Killed):
+                node.apply_settings(net_mode="tor_only")
+            self.assertIn("onlynet=onion", paths.BITCOIN_CONF.read_text())     # written …
+            self.assertEqual(sd.running, {U_TOR})                               # … with everything that reads it down
+            self.assertTrue(services.unfinished())
+            sd.die_at, sd.calls = None, []
+            self.assertEqual(services.apply(), set())                   # the files match: nothing looks changed,
+            self.assertEqual(sd.did("stop"), [])
+            self.assertEqual(sd.did("start"), [U_BITCOIND, U_FULCRUM, U_MEMPOOL])   # and still it all comes back
+        self.assertFalse(services.unfinished())
+
+    def test_a_restart_owed_after_an_update_is_not_forgotten(self):
+        with Systemd(self.all) as sd:
+            sd.die_at = ("stop", U_MEMPOOL)
+            with self.assertRaises(Systemd.Killed):
+                services.apply(restart=[U_BITCOIND])                    # a new Bitcoin Core was just installed
+            sd.die_at, sd.calls = None, []
+            self.assertEqual(services.apply(), {U_BITCOIND})            # an apply that was told of no restart
+            self.assertEqual(sd.did("stop"), [U_MEMPOOL, U_FULCRUM, U_BITCOIND])
+            sd.calls = []
+            self.assertEqual(services.apply(), set())                   # owed once, not for ever
+            self.assertEqual(sd.did("stop"), [])
+
+    def test_the_agent_finishes_it_and_keeps_trying(self):
+        with Systemd(self.all) as sd, mock.patch.object(system, "notify", return_value=True) as notify, \
+                contextlib.redirect_stdout(io.StringIO()) as log:
+            sd.die_at = ("stop", U_BITCOIND)
+            with self.assertRaises(Systemd.Killed):
+                node.apply_settings(net_mode="tor_only")                # Mempool and Fulcrum are down by now
+            sd.die_at, sd.calls = None, []
+            sd.refuse[("stop", U_BITCOIND)] = "Job for bitfedot-bitcoind.service canceled."
+            state = {}
+            agent.finish_unfinished(state)                              # Bitcoin Core will not stop
+            agent.finish_unfinished(state)                              # too soon to try again
+            self.assertEqual(sd.did("stop"), [U_BITCOIND])
+            notify.assert_called_once()
+            self.assertIn("Bitcoin Core could not be stopped", notify.call_args.args[1])
+            state["finish_next"] = 0
+            agent.finish_unfinished(state)                              # the same reason is not announced twice
+            notify.assert_called_once()
+            agent.finish_unfinished({"finish_next": 0}, announce_failure=False)   # notifications switched off
+            notify.assert_called_once()
+            sd.refuse.clear()
+            state["finish_next"] = 0
+            agent.finish_unfinished(state)
+            self.assertTrue(self.all <= sd.running)
+            self.assertNotIn("finish_error", state)
+        self.assertIn("onlynet=onion", paths.BITCOIN_CONF.read_text())
+        self.assertFalse(services.unfinished())
+        self.assertIn("agent: the change is complete", log.getvalue())
+
+    def test_the_agent_does_it_on_its_round(self):
+        with Systemd(self.all) as sd, contextlib.redirect_stdout(io.StringIO()):
+            sd.die_at = ("stop", U_FULCRUM)
+            with self.assertRaises(Systemd.Killed):
+                node.apply_settings(all_stopped=True)                   # "Stop all", cut short
+            sd.die_at = None
+            agent.tick({})                                              # everything is meant to be stopped: also then
+            self.assertEqual(sd.running & self.all, set())
+        self.assertFalse(services.unfinished())
+
+    def test_opening_the_app_finishes_it_too(self):
+        with Systemd(self.all) as sd:
+            self.assertFalse(node.on_launch())                          # nothing was cut short
+            sd.die_at = ("stop", U_FULCRUM)
+            with self.assertRaises(Systemd.Killed):
+                node.apply_settings(net_mode="tor_only")
+            sd.die_at = None
+            self.assertEqual(node.snapshot()["pending"], services.UNFINISHED_NOTE)     # the banner, with its button
+            self.assertTrue(node.on_launch())
+            self.assertTrue(self.all <= sd.running)
+        self.assertEqual(node.snapshot()["pending"], "")
+
+    def test_opening_the_app_still_starts_a_node_that_was_shut_down(self):
+        settings.update(all_stopped=True, resume_on_launch=True)        # "Shut down the node", then quit
+        with Systemd() as sd:
+            self.assertTrue(node.on_launch())
+            self.assertTrue(self.all <= sd.running)
+        s = settings.load()
+        self.assertFalse(s["all_stopped"] or s["resume_on_launch"])
+
+    def test_an_apply_that_is_still_running_is_not_an_unfinished_one(self):
+        with Systemd(self.all) as sd:
+            seen = []
+            sd.on[("stop", U_BITCOIND)] = lambda: seen.append((services.unfinished(), services.activity()))
+            node.apply_settings(net_mode="tor_only")
+        self.assertEqual(seen, [(False, "Stopping Bitcoin Core safely… (flushing to disk, this can take a few minutes)")])
+
+
+class Refused(unittest.TestCase):
+    """What systemd refuses must not pass silently, and must not leave a change half applied."""
+
+    def setUp(self):
+        self.all = {U_TOR, U_BITCOIND, U_FULCRUM, U_MEMPOOL}
+        store(phase="ready", net_mode="dual")
+        services.apply()
+        self.addCleanup(paths.APPLY_PENDING.unlink, missing_ok=True)
+
+    def test_a_service_that_does_not_stop_ends_the_change_before_any_file_is_replaced(self):
+        before = paths.BITCOIN_CONF.read_text()
+        with Systemd(self.all) as sd:
+            sd.refuse[("stop", U_FULCRUM)] = "Job for bitfedot-fulcrum.service canceled."
+            with self.assertRaises(RuntimeError) as failure:
+                node.apply_settings(net_mode="tor_only")
+            self.assertIn("Fulcrum could not be stopped (Job for bitfedot-fulcrum.service canceled.)",
+                          str(failure.exception))
+            self.assertEqual(sd.did("stop"), [U_MEMPOOL, U_FULCRUM])    # Bitcoin Core is not taken down under it
+            self.assertEqual(sd.did("start"), [])
+            self.assertEqual(paths.BITCOIN_CONF.read_text(), before)
+            self.assertTrue(services.unfinished())
+            sd.refuse.clear()
+            sd.calls = []
+            services.apply()
+            self.assertEqual(sd.did("stop"), [U_FULCRUM, U_BITCOIND])
+            self.assertEqual(sd.did("start"), [U_BITCOIND, U_FULCRUM, U_MEMPOOL])
+        self.assertIn("onlynet=onion", paths.BITCOIN_CONF.read_text())
+        self.assertFalse(services.unfinished())
+
+    def test_a_stop_that_gets_no_answer_in_time_is_a_failure_too(self):
+        with Systemd(self.all) as sd:
+            sd.refuse[("stop", U_BITCOIND)] = (124, "systemctl: timed out")     # what system.run reports
+            with self.assertRaises(RuntimeError) as failure:
+                services.apply(restart=[U_BITCOIND])
+            self.assertIn(f"Bitcoin Core could not be stopped (no answer after {services.STOP_TIMEOUT[U_BITCOIND]} "
+                          "seconds)", str(failure.exception))
+            self.assertEqual(sd.did("start"), [])                       # not started on top of a stop still under way
+
+    def test_systemd_not_answering_changes_nothing(self):
+        before = paths.BITCOIN_CONF.read_text()
+        silent = RuntimeError("systemd did not say what is running (Failed to connect to bus)")
+        with Systemd(self.all) as sd, mock.patch.object(system, "unit_states", side_effect=silent):
+            with self.assertRaises(RuntimeError):
+                node.apply_settings(net_mode="tor_only")
+            self.assertEqual(sd.calls, [])
+        self.assertEqual(paths.BITCOIN_CONF.read_text(), before)
+        self.assertTrue(services.unfinished())
+
+    def test_no_answer_is_never_read_as_nothing_is_running(self):
+        def answer(stdout, stderr=""):
+            return mock.patch.object(system, "run", return_value=subprocess.CompletedProcess([], 3, stdout, stderr))
+        with mock.patch.object(system, "DRY_RUN", False):
+            with answer("active\ninactive\n"):
+                self.assertEqual(system.unit_states([U_TOR, U_FULCRUM]), {U_TOR: "active", U_FULCRUM: "inactive"})
+            with answer("", "Failed to connect to user scope bus via local transport: No such file or directory"):
+                with self.assertRaises(RuntimeError) as failure:
+                    system.unit_states([U_TOR, U_FULCRUM])
+        self.assertIn("Failed to connect to user scope bus", str(failure.exception))
+
+    def test_a_service_that_was_started_behind_its_back_ends_the_change(self):
+        before = (paths.UNIT_DIR / U_BITCOIND).read_text()
+        with Systemd(self.all) as sd:
+            sd.on[("stop", U_TOR)] = lambda: sd.running.add(U_BITCOIND)     # say, a `systemctl start` by hand
+            with self.assertRaises(RuntimeError) as failure:
+                node.apply_settings(sandbox=False)                      # changes every unit
+            self.assertIn("Bitcoin Core started again", str(failure.exception))
+            self.assertEqual(sd.did("start"), [])
+        self.assertEqual((paths.UNIT_DIR / U_BITCOIND).read_text(), before)
+        self.assertTrue(services.unfinished())
+
+    def test_a_refused_start_is_reported_once_the_rest_was_started(self):
+        with Systemd() as sd:
+            sd.refuse[("start", U_FULCRUM)] = "Failed to start bitfedot-fulcrum.service: Unit is masked."
+            with self.assertRaises(RuntimeError) as failure:
+                services.apply()
+            self.assertIn("Fulcrum could not be started (Failed to start bitfedot-fulcrum.service: Unit is masked.)",
+                          str(failure.exception))
+            self.assertEqual(sd.did("start"), [U_TOR, U_BITCOIND, U_FULCRUM, U_MEMPOOL])    # Mempool all the same
+            self.assertIn(paths.U_AGENT, sd.running)
+            self.assertTrue(services.unfinished())
+            sd.refuse.clear()
+            services.apply()
+            self.assertIn(U_FULCRUM, sd.running)
+        self.assertFalse(services.unfinished())
+
+    def test_a_reload_that_systemd_refuses_is_reported(self):
+        with Systemd(self.all) as sd:
+            sd.refuse[("daemon-reload", "")] = "Failed to reload daemon: Access denied"
+            with self.assertRaises(RuntimeError) as failure:
+                node.apply_settings(net_mode="tor_only")
+            self.assertIn("systemd did not load it (Failed to reload daemon: Access denied)", str(failure.exception))
+            self.assertEqual(sd.did("start"), [])
+        self.assertTrue(services.unfinished())
+
+    def test_a_reboot_is_called_off_when_a_service_does_not_stop(self):
+        with Systemd(self.all | {paths.U_AGENT}) as sd, mock.patch.object(system, "run") as run, \
+                contextlib.redirect_stdout(io.StringIO()):
+            sd.refuse[("stop", U_BITCOIND)] = "Job for bitfedot-bitcoind.service canceled."
+            with self.assertRaises(RuntimeError):
+                node.safe_reboot()
+            run.assert_not_called()                                     # no `systemctl reboot`
+            self.assertIn(paths.U_AGENT, sd.running)                    # the agent is back, and it has work to do:
+            self.assertTrue(services.unfinished())
+            sd.refuse.clear()
+            agent.finish_unfinished({})
+            self.assertTrue(self.all <= sd.running)
+        self.assertFalse(services.unfinished())
+
+    def test_the_node_comes_back_if_the_computer_does_not_restart_after_all(self):
+        with Systemd(self.all | {paths.U_AGENT}) as sd, \
+                mock.patch.object(system, "run", side_effect=RuntimeError("Access denied")):
+            with self.assertRaises(RuntimeError):
+                node.safe_reboot()
+            self.assertTrue(self.all | {paths.U_AGENT} <= sd.running)
+        self.assertFalse(services.unfinished())
+
+    def test_after_the_reboot_the_apply_that_is_owed_changes_nothing(self):
+        with Systemd(self.all | {paths.U_AGENT}) as sd, mock.patch.object(system, "run"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            node.safe_reboot()
+            self.assertEqual(sd.running, set())
+            sd.running, sd.calls = self.all | {paths.U_AGENT}, []      # back up: systemd has started everything
+            agent.finish_unfinished({})
+            self.assertEqual((sd.did("stop"), sd.did("start")), ([], []))
+        self.assertFalse(services.unfinished())
+
+    def test_a_service_that_has_no_unit_is_not_one_that_does_not_stop(self):
+        """Mempool has no unit while it is switched off; asked to stop it, systemd answers with an
+        error. Stopping everything stops the rest and does not take that for a refusal."""
+        with Systemd(self.all | {paths.U_AGENT}) as sd:
+            node.apply_settings(mempool_enabled=False)                  # stops it, and its Quadlet files go
+            self.assertEqual(sd.systemctl("stop", U_MEMPOOL).returncode, 5)
+            sd.calls.clear()
+            with mock.patch.object(system, "run") as run:
+                node.safe_reboot()
+            self.assertEqual(sd.did("stop"), [U_FULCRUM, U_BITCOIND, U_TOR])
+            self.assertEqual(sd.running, set())
+            run.assert_called_once()                                    # `systemctl reboot`
+
+    def test_a_node_that_is_still_syncing_can_be_removed(self):
+        """During the first sync Fulcrum has a unit but does not run, and Mempool has none."""
+        store(phase="ibd")
+        with Systemd() as sd:
+            services.apply()
+            self.assertEqual(sd.running, {U_BITCOIND, paths.U_AGENT})
+            self.assertFalse(sd.has(U_MEMPOOL))
+            sd.calls.clear()
+            services.remove_all()
+            self.assertEqual(sd.did("stop"), [U_BITCOIND])
+            self.assertEqual(sd.running, set())
+        self.assertFalse(settings.load()["installed"])
+        self.assertFalse((paths.UNIT_DIR / U_BITCOIND).exists())
+        self.assertFalse(services.unfinished())
+
+    def test_nothing_is_stopped_if_the_agent_cannot_be(self):
+        """Left running, it would start the services again behind the back of whoever stops them."""
+        with Systemd(self.all | {paths.U_AGENT}) as sd, mock.patch.object(system, "run") as run:
+            sd.refuse[("stop", paths.U_AGENT)] = ("Failed to stop bitfedot-agent.service: "
+                                                  "Transport endpoint is not connected")
+            with self.assertRaises(RuntimeError) as failure:
+                node.safe_reboot()
+            self.assertIn("background agent could not be stopped", str(failure.exception))
+            self.assertEqual(sd.did("stop"), [])
+            self.assertTrue(self.all | {paths.U_AGENT} <= sd.running)
+            run.assert_not_called()
+
+    def test_stopping_everything_pays_a_restart_that_was_owed(self):
+        """A restart left over from an update is not carried out a second time after the reboot."""
+        with Systemd(self.all | {paths.U_AGENT}) as sd, mock.patch.object(system, "run"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            services._mark_unfinished({U_BITCOIND})
+            node.safe_reboot()
+            self.assertTrue(services.unfinished())                      # the node still has to come back
+            sd.running, sd.calls = self.all | {paths.U_AGENT}, []      # back up: systemd has started everything
+            agent.finish_unfinished({})
+            self.assertEqual((sd.did("stop"), sd.did("start")), ([], []))
+        self.assertFalse(services.unfinished())
+
+    def test_a_service_that_was_started_behind_its_back_ends_the_removal(self):
+        with Systemd(self.all | {paths.U_AGENT}) as sd:
+            sd.on[("stop", U_TOR)] = lambda: sd.running.add(U_FULCRUM)      # say, a `systemctl start` by hand
+            with self.assertRaises(RuntimeError) as failure:
+                services.remove_all()
+            self.assertIn("Fulcrum started again", str(failure.exception))
+            self.assertIn("Nothing was removed.", str(failure.exception))
+            self.assertTrue(settings.load()["installed"])
+            self.assertTrue((paths.UNIT_DIR / U_FULCRUM).exists())
+            self.assertIn(paths.U_AGENT, sd.running)
+        self.assertTrue(services.unfinished())
+
+    def test_a_node_that_does_not_stop_is_not_removed(self):
+        with Systemd(self.all | {paths.U_AGENT}) as sd:
+            sd.refuse[("stop", U_FULCRUM)] = "Job for bitfedot-fulcrum.service canceled."
+            with self.assertRaises(RuntimeError) as failure:
+                services.remove_all()
+            self.assertIn("Fulcrum could not be stopped (Job for bitfedot-fulcrum.service canceled.). "
+                          "Nothing was removed.", str(failure.exception))
+            self.assertTrue(settings.load()["installed"])
+            self.assertTrue((paths.UNIT_DIR / U_BITCOIND).exists())
+            self.assertIn(paths.U_AGENT, sd.running)                    # it brings Mempool back
+            self.assertTrue(services.unfinished())
+            sd.refuse.clear()
+            services.remove_all()
+            self.assertEqual(sd.running, set())
+        self.assertFalse(settings.load()["installed"])
+        self.assertFalse((paths.UNIT_DIR / U_BITCOIND).exists())
+        self.assertFalse(services.unfinished())
+
+    def test_a_restart_is_refused_while_a_change_is_being_applied(self):
+        with Systemd(self.all) as sd:
+            with services._apply_lock(), mock.patch.object(services.time, "sleep"):
+                with self.assertRaises(services.Busy):
+                    node.restart(U_BITCOIND)                            # it could come up on files about to change
+            self.assertEqual(sd.calls, [])
+            node.restart(U_BITCOIND)
+            self.assertEqual(sd.calls, [("restart", U_BITCOIND)])
+            sd.refuse[("restart", U_TOR)] = "Failed to restart bitfedot-tor.service: Unit not found."
+            with self.assertRaises(RuntimeError):
+                node.tor_reconnect()
+
+
+class LatestSettings(unittest.TestCase):
+    """Whoever gets to apply, applies what is stored at that moment — never an older copy."""
+
+    def setUp(self):
+        self.addCleanup(paths.APPLY_PENDING.unlink, missing_ok=True)
+
+    def test_what_the_agent_read_earlier_does_not_undo_a_change_made_since(self):
+        store(phase="ready", tor_route="vpn", vpn_iface="wg0", status_notifications=False, auto_check_updates=False)
+        vpn = [("10.2.0.2", None)]
+
+        def the_user_switches_tor_to_direct(*_announcement):
+            node.apply_settings(tor_route="direct")                     # saved and applied before the agent's turn
+            return True
+        with Systemd({U_TOR, U_BITCOIND, U_FULCRUM, U_MEMPOOL}) as sd, \
+                mock.patch.object(system, "vpn_addresses", side_effect=lambda _iface: vpn[0]), \
+                mock.patch.object(system, "notify", side_effect=the_user_switches_tor_to_direct):
+            services.apply()
+            self.assertIn("OutboundBindAddress 10.2.0.2", paths.TORRC.read_text())
+            vpn[0] = (None, None)                                       # the VPN drops; the agent has read the settings …
+            agent.tick({"vpn": ("10.2.0.2", None)})                     # … and applies after the user did
+            self.assertIn(U_TOR, sd.running)                            # with the old copy Tor would be stopped: no VPN
+        self.assertEqual(paths.TORRC.read_text(), services.torrc(settings.load()))
+        self.assertNotIn("OutboundBindAddress", paths.TORRC.read_text())
+
+    def test_changes_saved_one_after_the_other_are_all_applied_whoever_goes_first(self):
+        store(phase="ready", net_mode="dual")
+        services.apply()
+        settings.update(net_mode="tor_only")                            # saved by one caller,
+        settings.update(private_broadcast=True)                         # then by another, whose apply() runs first
+        services.apply()
+        services.apply()
+        conf = paths.BITCOIN_CONF.read_text()
+        self.assertIn("onlynet=onion", conf)
+        self.assertIn("privatebroadcast=1", conf)
+
+    def test_switching_autostart_writes_nothing_a_service_reads(self):
+        store(phase="ready", net_mode="dual")
+        services.apply()
+        before = paths.BITCOIN_CONF.read_text()
+        s = settings.update(net_mode="tor_only", autostart=False)       # saved; not applied yet
+        services.write_autostart(s)
+        self.assertFalse((paths.AUTOSTART_DIR / f"{paths.APP_ID}.desktop").exists())
+        self.assertEqual(paths.BITCOIN_CONF.read_text(), before)
+        with Systemd({U_BITCOIND}) as sd:
+            services.apply()
+            self.assertEqual(sd.did("stop"), [U_BITCOIND])              # so the change is still seen, and carried out
 
 
 class Hardening(unittest.TestCase):
@@ -1400,11 +1871,12 @@ class Agent(unittest.TestCase):
                 mock.patch.object(node, "snapshot", side_effect=http.client.IncompleteRead(b"")), \
                 mock.patch.object(system, "vpn_addresses", return_value=(None, None)), \
                 mock.patch.object(services, "apply") as apply, \
+                mock.patch.object(services, "unfinished", return_value=False), \
                 mock.patch.object(installer, "check_updates") as check, \
                 mock.patch.object(hardening, "check_os_updates", side_effect=RuntimeError("no dnf")), \
                 contextlib.redirect_stdout(io.StringIO()) as log:
             agent.tick({"vpn": ("10.2.0.2", None)})                # the VPN has just gone
-        apply.assert_called_once_with(s)
+        apply.assert_called_once_with()
         check.assert_called_once()
         self.assertEqual(self.sent, ["Tor routing"])
         self.assertIn("agent: status: IncompleteRead", log.getvalue())
@@ -1710,26 +2182,148 @@ class Misc(unittest.TestCase):
 
 
 class Migration(unittest.TestCase):
-    def test_adopts_a_pre_release_install(self):
-        shutil.rmtree(paths.CONFIG_DIR, ignore_errors=True)
-        shutil.rmtree(paths.DATA_DIR, ignore_errors=True)
-        oc, od = paths.LEGACY_CONFIG_DIR, paths.LEGACY_DATA_DIR
-        (od / "chain/bitcoin").mkdir(parents=True)
-        (od / "chain/bitcoin/blk00000.dat").write_text("blocks")
-        oc.mkdir(parents=True)
-        (oc / "settings.json").write_text(json.dumps({
-            "installed": True, "phase": "ibd", "data_dir": str(od / "chain"),
+    """Adopting a pre-release install: nothing may be lost, and wherever it stops it can be run again."""
+
+    def setUp(self):
+        self.oc, self.od = paths.LEGACY_CONFIG_DIR, paths.LEGACY_DATA_DIR
+        for folder in (paths.CONFIG_DIR, paths.DATA_DIR, self.oc, self.od):
+            shutil.rmtree(folder, ignore_errors=True)
+        (self.od / "chain/bitcoin").mkdir(parents=True)
+        (self.od / "chain/bitcoin/blk00000.dat").write_text("blocks")
+        (self.od / "tor/hs_fulcrum").mkdir(parents=True)
+        (self.od / "tor/hs_fulcrum/hostname").write_text("old.onion\n")
+        self.oc.mkdir(parents=True)
+        (self.oc / "settings.json").write_text(json.dumps({
+            "installed": True, "phase": "ibd", "data_dir": str(self.od / "chain"),
             "versions": {"bitcoin": "32.1"}, "secrets": {"rpc_salt": "abcd", "mempool_rpc_password": "x"}}))
         settings.update(theme="dark")                # BitFedot was opened once before adopting
         self.assertTrue(migrate.pending())
-        migrate.adopt()
+
+    def adopted(self):
         s = settings.load()
         self.assertTrue(s["installed"])
+        self.assertFalse(s["adopting"])
         self.assertEqual(s["data_dir"], str(paths.DATA_DIR / "chain"))
         self.assertEqual(s["theme"], "dark")
+        self.assertEqual(s["secrets"]["rpc_salt"], "abcd")
         self.assertEqual((paths.DATA_DIR / "chain/bitcoin/blk00000.dat").read_text(), "blocks")
-        self.assertFalse(oc.exists() or od.exists())
+        self.assertEqual((paths.TOR_DIR / "hs_fulcrum/hostname").read_text(), "old.onion\n")
+        self.assertFalse(self.oc.exists() or self.od.exists())
+        self.assertIn(str(paths.DATA_DIR / "chain" / "bitcoin"), (paths.UNIT_DIR / U_BITCOIND).read_text())
         self.assertFalse(migrate.pending())
+        self.assertFalse(services.unfinished())
+        self.assertTrue(node.snapshot()["installed"])
+
+    def test_adopts_a_pre_release_install(self):
+        migrate.adopt()
+        self.adopted()
+
+    def test_stopped_between_the_two_moves_the_old_install_is_still_found(self):
+        real = os.rename
+
+        def rename(src, dst):
+            if Path(dst) == paths.CONFIG_DIR:
+                raise OSError(errno.EACCES, "Permission denied")
+            return real(src, dst)
+        with mock.patch.object(migrate.os, "rename", rename), self.assertRaises(RuntimeError) as failure:
+            migrate.adopt()
+        self.assertIn("could not be renamed", str(failure.exception))
+        self.assertFalse(self.od.exists())                              # the data is across,
+        self.assertTrue(self.oc.exists())                               # the configuration is not:
+        self.assertTrue(migrate.pending())                              # still an install to adopt,
+        self.assertFalse(settings.load()["installed"])                  # and not mistaken for a working node
+        self.assertFalse(node.snapshot()["installed"])
+        migrate.adopt()
+        self.adopted()
+
+    def test_the_process_dying_at_any_step_leaves_something_that_can_be_run_again(self):
+        steps = [(migrate, "_stop_old_services"), (migrate, "_complete_settings"), (settings, "ensure_secrets"),
+                 (migrate, "_remove_old_app"), (services, "apply")]
+        for index, (module, name) in enumerate(steps):
+            with self.subTest(dies_in=name):
+                if index:
+                    self.setUp()
+                with mock.patch.object(module, name, side_effect=Systemd.Killed(name)):
+                    with self.assertRaises(Systemd.Killed):
+                        migrate.adopt()
+                self.assertTrue(migrate.pending())
+                self.assertFalse(node.snapshot()["installed"])          # the wizard keeps it until it is done
+                migrate.adopt()
+                self.adopted()
+
+    def test_nothing_is_stopped_or_moved_when_a_destination_holds_data(self):
+        (paths.DATA_DIR / "chain/bitcoin").mkdir(parents=True)
+        (paths.DATA_DIR / "chain/bitcoin/blk00001.dat").write_text("a chain of BitFedot's own")
+        with Systemd() as sd, self.assertRaises(RuntimeError) as refusal:
+            migrate.adopt()
+        self.assertIn("already contains data (for example chain/bitcoin/blk00001.dat)", str(refusal.exception))
+        self.assertEqual(sd.calls, [])                                  # the old node was not even stopped
+        self.assertTrue(self.oc.exists() and self.od.exists())
+        self.assertEqual((paths.DATA_DIR / "chain/bitcoin/blk00001.dat").read_text(), "a chain of BitFedot's own")
+        self.assertTrue(migrate.pending())
+
+    def test_what_is_left_of_downloads_is_not_in_the_way(self):
+        (paths.DOWNLOADS_DIR / "bitcoin-32.1").mkdir(parents=True)
+        (paths.DOWNLOADS_DIR / "bitcoin-32.1/SHA256SUMS").write_text("of an install that was started and given up")
+        migrate.adopt()
+        self.adopted()
+
+    def test_nothing_is_moved_while_an_old_service_is_still_running(self):
+        old_core = f"{paths.LEGACY_NAME}-bitcoind.service"
+        (paths.UNIT_DIR / old_core).parent.mkdir(parents=True, exist_ok=True)
+        (paths.UNIT_DIR / old_core).write_text("[Service]\n")
+        with Systemd({old_core}) as sd:
+            sd.refuse[("stop", old_core)] = (124, "systemctl: timed out")
+            with self.assertRaises(RuntimeError) as failure:
+                migrate.adopt()
+            self.assertIn("Bitcoin Core of the old installation did not stop. Nothing was moved.",
+                          str(failure.exception))
+            self.assertTrue(self.oc.exists() and self.od.exists())
+            self.assertTrue((paths.UNIT_DIR / old_core).exists())       # nor is its unit taken away under it
+            sd.refuse.clear()
+            migrate.adopt()
+            self.assertNotIn(old_core, sd.running)
+        self.assertFalse((paths.UNIT_DIR / old_core).exists())
+        self.adopted()
+
+    def test_started_but_not_running_yet_it_is_finished_by_running_it_again(self):
+        with mock.patch.object(services, "apply", side_effect=RuntimeError("Fulcrum could not be started")):
+            with self.assertRaises(RuntimeError):
+                migrate.adopt()
+        self.assertFalse(self.oc.exists() or self.od.exists())          # moved …
+        s = settings.load()
+        self.assertTrue(s["installed"] and s["adopting"])               # … but not a running node yet:
+        self.assertFalse(node.snapshot()["installed"])                  # the wizard keeps it,
+        self.assertFalse(node.on_launch())                              # and nothing starts it half done
+        self.assertTrue(migrate.pending())
+        migrate.adopt()
+        self.adopted()
+
+    def test_a_lock_file_that_reappears_during_the_move_is_not_in_the_way(self):
+        real, calls = os.rename, []
+
+        def rename(src, dst):
+            calls.append(Path(dst))
+            if Path(dst) == paths.CONFIG_DIR and calls.count(paths.CONFIG_DIR) == 1:
+                paths.CONFIG_DIR.mkdir()                                # the app's status poll looked at its settings
+                (paths.CONFIG_DIR / ".lock").touch()
+                raise OSError(errno.ENOTEMPTY, "Directory not empty")
+            return real(src, dst)
+        with mock.patch.object(migrate.os, "rename", rename):
+            migrate.adopt()
+        self.assertEqual(calls.count(paths.CONFIG_DIR), 2)
+        self.adopted()
+
+    def test_a_folder_is_never_copied(self):
+        with mock.patch.object(migrate.os, "rename", side_effect=OSError(errno.EXDEV, "Invalid cross-device link")), \
+                mock.patch.object(migrate.shutil, "move") as move, mock.patch.object(migrate.shutil, "copytree") as copy:
+            with self.assertRaises(RuntimeError) as failure:
+                migrate.adopt()
+        self.assertIn("could not be renamed", str(failure.exception))
+        move.assert_not_called()
+        copy.assert_not_called()
+        self.assertEqual((self.od / "chain/bitcoin/blk00000.dat").read_text(), "blocks")
+        self.assertTrue(migrate.pending())
 
 
 if __name__ == "__main__":

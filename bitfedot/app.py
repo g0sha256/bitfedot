@@ -236,13 +236,15 @@ class App(Adw.Application):
         threading.Thread(target=work, daemon=True).start()
 
     def _resume_if_shut_down(self):
-        """Counterpart of "Shut down the node": opening BitFedot starts the node again."""
-        try:
-            if not settings.load()["resume_on_launch"]:
-                return
-        except RuntimeError:
-            return
-        threading.Thread(target=lambda: (node.start_all(), self.poll_now()), daemon=True).start()
+        """Counterpart of "Shut down the node": opening BitFedot starts the node again.
+        A change to the services that was cut short is finished the same way (node.on_launch)."""
+        def work():
+            try:
+                if node.on_launch():
+                    self.poll_now()
+            except Exception as e:           # the window still opens; the banner offers to try again
+                print(f"launch: {type(e).__name__}: {e}", file=sys.stderr)
+        threading.Thread(target=work, daemon=True).start()
 
     def _take_screenshot(self):
         w = self.window

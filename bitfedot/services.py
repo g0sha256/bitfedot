@@ -6,16 +6,31 @@ the running system onto them.
 for (Mempool → Fulcrum → Bitcoin Core → Tor), then everything that should run
 is started in the opposite order. It is called by the installer, the GUI and
 the background agent; a file lock keeps those from reconfiguring concurrently.
+
+Three rules keep what runs from drifting away from what is stored:
+
+  * apply() reads the settings itself, under the lock. Whoever holds the lock
+    applies the latest ones; a snapshot taken earlier can never be applied later.
+  * A file is replaced only once everything that reads it has been stopped. However
+    an apply() ends — a service that will not stop, the app closed, the power gone —
+    whatever runs still matches its files, and the next apply() sees from the files
+    what is left to do. (A restart the files cannot show, after a new binary, is
+    written down first: paths.APPLY_PENDING.)
+  * Nothing systemd refuses passes silently. A stop that fails ends the apply()
+    before anything is replaced; anything else is tried in full and then reported.
+    An apply() that did not complete stays `unfinished()`, and the background agent
+    and the app finish it.
 """
 import fcntl
 import hashlib
 import hmac
 import os
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import paths, pins, system
+from . import paths, pins, settings, system
 from .paths import U_AGENT, U_BITCOIND, U_FULCRUM, U_MEMPOOL, U_TOR
 
 HEADER = "# Managed by BitFedot — edits are overwritten. Change settings in the app.\n"
@@ -376,34 +391,48 @@ WantedBy=default.target
 
 
 # ----------------------------------------------------------- write files --
-def _write(path: Path, text: str, mode=0o600) -> bool:
-    """Atomically write `text`; -> True if the file changed."""
+def sync_dir(directory: Path):
+    """Make a rename or removal inside `directory` survive a power cut."""
     try:
-        if path.read_text() == text:
-            return False
+        fd = os.open(directory, os.O_RDONLY)
     except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:                     # a filesystem that cannot do this for folders
         pass
+    finally:
+        os.close(fd)
+
+
+def _differs(path: Path, text: str) -> bool:
+    try:
+        return path.read_text() != text
+    except (OSError, ValueError):       # missing, unreadable, or not text at all
+        return True
+
+
+def write_file(path: Path, text: str, mode=0o600) -> bool:
+    """Atomically and durably write `text`; -> True if the file changed."""
+    if not _differs(path, text):
+        return False
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, mode)
     with os.fdopen(fd, "w") as f:
         f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
+    sync_dir(path.parent)
     return True
 
 
-def write_configs(s) -> set:
-    """Write all files; return the set of units whose configuration changed.
-    Never stops or starts anything."""
-    paths.ensure_dirs()
-    data = Path(s["data_dir"])
-    for d in (data / "bitcoin", data / "fulcrum", paths.TOR_DIR / "data",
-              paths.MEMPOOL_DIR / "mysql", paths.MEMPOOL_DIR / "cache"):
-        d.mkdir(parents=True, exist_ok=True)
-    os.chmod(paths.TOR_DIR / "data", 0o700)
-    ensure_compat_libs()
-
-    changed = set()
+def config_files(s, desired=None) -> list:
+    """Every generated file as (path, text, unit), where `unit` is what has to restart
+    when that file changes. Renders only: nothing is written here. Writing is apply()'s
+    job, and it does it only once the unit concerned is down."""
+    desired = desired_units(s) if desired is None else desired
     files = [
         (paths.BITCOIN_CONF, bitcoin_conf(s), U_BITCOIND),
         (paths.UNIT_DIR / U_BITCOIND, bitcoind_unit(s), U_BITCOIND),
@@ -413,35 +442,65 @@ def write_configs(s) -> set:
         (paths.UNIT_DIR / U_FULCRUM, fulcrum_unit(s), U_FULCRUM),
         (paths.UNIT_DIR / U_AGENT, agent_unit(s), U_AGENT),
     ]
-    for path, text, unit in files:
-        if _write(path, text):
-            changed.add(unit)
-    if desired_units(s)[U_MEMPOOL]:
-        for name, text in mempool_quadlets(s).items():
-            if _write(paths.QUADLET_DIR / name, text):
-                changed.add(U_MEMPOOL)
+    if desired[U_MEMPOOL]:
+        files += [(paths.QUADLET_DIR / name, text, U_MEMPOOL)
+                  for name, text in mempool_quadlets(s).items()]
+    return files
 
+
+def _prepare_dirs(s):
+    """The folders the services expect, and the library names upstream binaries look for."""
+    paths.ensure_dirs()
+    data = Path(s["data_dir"])
+    for d in (data / "bitcoin", data / "fulcrum", paths.TOR_DIR / "data",
+              paths.MEMPOOL_DIR / "mysql", paths.MEMPOOL_DIR / "cache"):
+        d.mkdir(parents=True, exist_ok=True)
+    os.chmod(paths.TOR_DIR / "data", 0o700)
+    ensure_compat_libs()
+
+
+def write_autostart(s):
+    """The tray app's login autostart entry, per the `autostart` setting. Touches nothing
+    else — in particular no file a service reads."""
     for old_id in paths.OLD_APP_IDS:                     # entries from before a rename
         (paths.AUTOSTART_DIR / f"{old_id}.desktop").unlink(missing_ok=True)
     auto = paths.AUTOSTART_DIR / f"{paths.APP_ID}.desktop"
     if s["autostart"]:
-        _write(auto, autostart_entry(), 0o644)
+        write_file(auto, autostart_entry(), 0o644)
     elif auto.exists():
         auto.unlink()
-    return changed
 
 
 # ----------------------------------------------------------------- apply --
+class Busy(RuntimeError):
+    """A reconfiguration is under way and holds the lock."""
+
+
 @contextmanager
-def _apply_lock():
+def _apply_lock(wait=True):
+    """The lock every reconfiguration holds. With `wait` false: raise Busy instead of
+    queueing behind one that is running (a second or so of patience covers the status
+    poll, which takes the lock for an instant to see whether it is free)."""
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(paths.APPLY_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
+        if wait:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            for _ in range(20):
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.05)
+            else:
+                raise Busy("BitFedot is changing the services right now — try again when it has finished.")
+        try:
+            yield
+        finally:
+            paths.ACTIVITY_FILE.unlink(missing_ok=True)
+            fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
-        paths.ACTIVITY_FILE.unlink(missing_ok=True)
-        fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
@@ -470,12 +529,63 @@ def activity() -> str:
     return ""
 
 
+UNFINISHED_NOTE = "A change to your node was not completed"
+
+
+def _owed() -> set:
+    """Units an unfinished apply() still owes a restart that the files do not show."""
+    try:
+        return set(paths.APPLY_PENDING.read_text().split()) & set(LABELS)
+    except (OSError, ValueError):
+        return set()
+
+
+def _mark_unfinished(owed=()):
+    """Record, durably, that a reconfiguration is under way and which restarts it owes.
+    The record goes when an apply() completes; until then `unfinished()` tells."""
+    write_file(paths.APPLY_PENDING, "".join(f"{unit}\n" for unit in sorted(owed)))
+
+
+def _finished():
+    paths.APPLY_PENDING.unlink(missing_ok=True)
+    sync_dir(paths.CONFIG_DIR)
+
+
+def unfinished() -> bool:
+    """Did a reconfiguration begin and not complete — the app was closed or the computer
+    switched off in the middle of it, or a service would not stop? Running apply() once
+    more finishes it. False while one is running."""
+    return paths.APPLY_PENDING.exists() and not activity()
+
+
+def _systemctl(*args, timeout=120) -> str:
+    """Run one systemctl call. -> '' if systemd did it, otherwise why not.
+    One unit per call: a call that names several does nothing for any of them when
+    systemd does not have one."""
+    p = system.systemctl(*args, timeout=timeout)
+    if p.returncode == 0:
+        return ""
+    said = (p.stderr or p.stdout or "").strip().splitlines()
+    if p.returncode == 124 and (not said or "timed out" in said[-1]):      # system.run's own limit
+        return f"no answer after {timeout} seconds"
+    return said[-1].strip() if said else f"systemctl exit status {p.returncode}"
+
+
+def _up(states: dict) -> set:
+    """Units that are running in any sense: also starting, stopping or waiting to restart."""
+    return {unit for unit, state in states.items() if state not in ("inactive", "failed")}
+
+
 def _stop_in_order(units, report=None):
+    """Stop `units`, consumers first, waiting for each. Raises at the first one that does
+    not stop: nothing it depends on may be taken down under it."""
     for unit in STOP_ORDER:
         if unit in units:
             _note(f"Stopping {LABELS[unit]} safely…" + (
                 " (flushing to disk, this can take a few minutes)" if unit == U_BITCOIND else ""), report)
-            system.systemctl("stop", unit, timeout=STOP_TIMEOUT[unit])
+            why = _systemctl("stop", unit, timeout=STOP_TIMEOUT[unit])
+            if why:
+                raise RuntimeError(f"{LABELS[unit]} could not be stopped ({why}).")
 
 
 def _remove_mempool_quadlets() -> bool:
@@ -485,71 +595,166 @@ def _remove_mempool_quadlets() -> bool:
     return bool(files)
 
 
-def apply(s, restart=(), report=None) -> set:
-    """Converge files and units onto settings `s`.
+def apply(*, restart=(), report=None) -> set:
+    """Converge files and units onto the stored settings.
 
     Units whose configuration changed (or that are listed in `restart`, e.g.
     after a binary upgrade) are restarted together with everything depending
     on them, in a safe order. Blocks until every stop has completed.
+
+    Raises RuntimeError when systemd refuses something. A service that does not
+    stop ends it there, before any file is replaced; whatever else fails is
+    reported once everything has been tried. Either way the apply stays
+    `unfinished()`: run again — by hand, by the agent, at the next launch — it
+    carries on from where things stand.
     -> set of units whose configuration changed."""
     with _apply_lock():
+        s = settings.load()                 # the latest, whoever saved them and whenever
         _note("Applying changes…", report)
-        changed = write_configs(s) | set(restart)
-        system.systemctl("daemon-reload")
+        owed = _owed() | (set(restart) & set(LABELS))
+        _mark_unfinished(owed)
         desired = desired_units(s)
-        states = system.unit_states(desired)
-        running = {u for u, st in states.items() if st in ("active", "activating", "deactivating")}
+        files = config_files(s, desired)
+        stale = {unit for path, text, unit in files if _differs(path, text)} | owed
+        states = system.unit_states(desired)         # raises if systemd does not answer
+        running = _up(states)
 
         # 1. What has to go down: unwanted units, changed units, and their dependents.
-        cycle = {u for u in running if desired[u] and u in changed}
+        cycle = {u for u in running if desired[u] and u in stale}
         for base in (U_BITCOIND, U_FULCRUM):
             if base in cycle or (base in running and not desired[base]):
                 cycle |= {d for d in DEPENDENTS[base] if d in running and desired[d]}
         going_down = {u for u in running if not desired[u]} | cycle
-        _stop_in_order(going_down, report)
+        try:
+            _stop_in_order(going_down, report)
+        except RuntimeError as e:
+            raise RuntimeError(f"{e} No file was changed; the change stays pending.") from None
+        if going_down:      # stopping takes minutes: is everything that must be down still down?
+            must_be_down = {u for u in STOP_ORDER if u in stale or not desired[u]}
+            back = sorted(LABELS[u] for u in _up(system.unit_states(desired)) & must_be_down)
+            if back:
+                raise RuntimeError(f"{' and '.join(back)} started again while the change was being "
+                                   "applied — not by BitFedot. No file was changed; the change stays pending.")
 
-        if not desired[U_MEMPOOL] and _remove_mempool_quadlets():
-            system.systemctl("daemon-reload")
+        # 2. Nothing that reads them is running now: replace the files. (The agent is the
+        #    exception. It keeps running, so the restart it is owed is written down first;
+        #    while applying it never restarts itself, its new unit serves from its next start.)
+        me = bool(os.environ.get("BITFEDOT_AGENT"))
+        agent_stale = U_AGENT in stale and U_AGENT in running and desired[U_AGENT]
+        owed = {U_AGENT} if agent_stale and not me else set()
+        _mark_unfinished(owed)
+        _prepare_dirs(s)
+        for path, text, _unit in files:
+            write_file(path, text)
+        write_autostart(s)
+        if not desired[U_MEMPOOL]:
+            _remove_mempool_quadlets()
+        why = _systemctl("daemon-reload")
+        if why:
+            raise RuntimeError(f"The new configuration is written, but systemd did not load it ({why}). "
+                               "The change stays pending.")
 
-        # 2. Bring everything that should run back up, providers first.
+        # 3. Bring everything that should run back up, providers first. What fails here is
+        #    collected, so that one refusal does not keep the rest of the node down.
+        problems = []
+
+        def attempt(what, *args) -> bool:
+            why = _systemctl(*args)
+            if why:
+                problems.append(f"{what} ({why}).")
+            return not why
+
         for unit in reversed(STOP_ORDER):
             generated = unit == U_MEMPOOL        # Quadlet units cannot be enabled/disabled
-            exists = generated or (paths.UNIT_DIR / unit).exists()
             if desired[unit]:
                 if not generated:
-                    system.systemctl("enable", unit)
+                    attempt(f"{LABELS[unit]} could not be enabled", "enable", unit)
                 if unit not in running or unit in going_down:
                     _note(f"Starting {LABELS[unit]}…", report)
-                    system.systemctl("--no-block", "start", unit)
-            elif exists and not generated:
+                    attempt(f"{LABELS[unit]} could not be started", "--no-block", "start", unit)
+            elif not generated and (paths.UNIT_DIR / unit).exists():
                 if states.get(unit) == "failed":
                     system.systemctl("reset-failed", unit)
-                system.systemctl("disable", unit)
+                attempt(f"{LABELS[unit]} could not be disabled", "disable", unit)
 
-        # 3. The agent follows the install state; it never restarts itself mid-flight.
+        # 4. The agent follows the install state.
         if desired[U_AGENT]:
-            system.systemctl("enable", U_AGENT)
-            if not os.environ.get("BITFEDOT_AGENT"):
-                system.systemctl("--no-block", "restart" if U_AGENT in changed and U_AGENT in running
-                                 else "start", U_AGENT)
+            attempt("The background agent could not be enabled", "enable", U_AGENT)
+            if not me:
+                attempt("The background agent could not be started",
+                        "--no-block", "restart" if agent_stale else "start", U_AGENT)
         else:
             system.systemctl("disable", "--now", U_AGENT)
-    return changed
+
+        if problems:
+            raise RuntimeError(" ".join(problems) + " The change stays pending.")
+        _finished()
+    return stale
+
+
+def restart_unit(unit, wait=False):
+    """Restart one service as it is configured now — the user's "Restart" and "Reconnect".
+    Refused (Busy) while a reconfiguration is under way: started in the middle of one, a
+    service could come up with files that are about to be replaced."""
+    with _apply_lock(wait=False):
+        _note(f"Restarting {LABELS[unit]}…")
+        why = _systemctl(*(() if wait else ("--no-block",)), "restart", unit)
+        if why:
+            raise RuntimeError(f"{LABELS[unit]} could not be restarted ({why}).")
+
+
+def _stop_all(report=None):
+    """Stop the background agent — or it would start things again — and then every
+    service, consumers first, waiting for each.
+
+    Only what is up is asked to stop. systemd answers with an error for a unit it does
+    not have, and Mempool has none while it is switched off or the first sync is still
+    running: that is not "could not be stopped". Raises when systemd does not answer,
+    and at the first unit that does not stop."""
+    up = _up(system.unit_states((U_AGENT, *STOP_ORDER)))
+    if U_AGENT in up:
+        why = _systemctl("stop", U_AGENT)
+        if why:
+            raise RuntimeError(f"The {LABELS[U_AGENT]} could not be stopped ({why}).")
+    _stop_in_order(up, report)
 
 
 def stop_everything(report=None):
     """Ordered, blocking stop of every service without changing what is enabled
-    (used before a reboot: everything comes back by itself afterwards)."""
+    (used before a reboot: everything comes back by itself afterwards).
+
+    An apply() is owed from the first moment: it is a no-op after the reboot, and it is
+    what brings the node back if this is cut short or the reboot never happens. If a
+    service does not stop, this raises and the agent is started again to do just that."""
     with _apply_lock():
-        system.systemctl("stop", U_AGENT)        # or it would start things again
-        _stop_in_order(set(STOP_ORDER), report)
+        _mark_unfinished(_owed())
+        try:
+            _stop_all(report)
+        except BaseException:
+            system.systemctl("--no-block", "start", U_AGENT)
+            raise
+        _mark_unfinished()      # a restart that was owed is paid: everything is down, and will start afresh
 
 
-def remove_all(s, report=None):
-    """Stop and remove every unit. Blockchain data and settings are kept."""
+def remove_all(report=None):
+    """Stop and remove every unit, then mark the node as not installed. Blockchain data
+    and settings are kept.
+
+    If a service does not stop, nothing is removed: this raises, the node stays installed
+    and the agent is started again, which brings back what had already been stopped."""
     with _apply_lock():
-        system.systemctl("disable", "--now", U_AGENT)
-        _stop_in_order(set(STOP_ORDER), report)
+        _mark_unfinished(_owed())
+        try:
+            _stop_all(report)
+            back = sorted(LABELS[u] for u in _up(system.unit_states(STOP_ORDER)))
+            if back:    # stopping takes minutes
+                raise RuntimeError(f"{' and '.join(back)} started again while the services were being "
+                                   "stopped — not by BitFedot.")
+        except BaseException as e:
+            system.systemctl("--no-block", "start", U_AGENT)
+            if isinstance(e, RuntimeError):
+                raise RuntimeError(f"{str(e).rstrip('.')}. Nothing was removed.") from None
+            raise
         for unit in (*STOP_ORDER, U_AGENT):
             if unit != U_MEMPOOL:
                 system.systemctl("disable", unit)
@@ -557,3 +762,6 @@ def remove_all(s, report=None):
         _remove_mempool_quadlets()
         (paths.AUTOSTART_DIR / f"{paths.APP_ID}.desktop").unlink(missing_ok=True)
         system.systemctl("daemon-reload")
+        # Still under the lock: an apply() queued behind this one must find nothing to run.
+        settings.update(installed=False)
+        _finished()

@@ -13,6 +13,7 @@ from . import paths
 
 DEFAULTS = {
     "installed": False,
+    "adopting": False,           # a pre-release install was moved over and is not started yet (migrate.py)
     # new -> ibd (initial block download) -> ready
     "phase": "new",
     "data_dir": str(paths.DEFAULT_CHAIN_DIR),

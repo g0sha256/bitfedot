@@ -19,5 +19,5 @@
   </description>
   <launchable type="desktop-id">io.github.g0sha256.BitFedot.desktop</launchable>
   <content_rating type="oars-1.1"/>
-  <releases><release version="0.3.1" date="2026-11-17"/><release version="0.3.0" date="2026-11-17"/><release version="0.2.0" date="2026-11-16"/></releases>
+  <releases><release version="0.3.2" date="2026-11-22"/><release version="0.3.1" date="2026-11-17"/><release version="0.3.0" date="2026-11-17"/><release version="0.2.0" date="2026-11-16"/></releases>
 </component>

@@ -191,13 +191,18 @@ def explorer_available(snap) -> bool:
 
 def snapshot() -> dict:
     s = settings.load()
-    snap = {"t": time.time(), "settings": s, "installed": s["installed"], "phase": s["phase"]}
-    if not s["installed"]:
+    # A node whose move from the pre-release name is not finished (migrate.py) is not an
+    # installed one yet: it has no units, and the wizard is where the move is completed.
+    installed = bool(s["installed"]) and not s["adopting"]
+    snap = {"t": time.time(), "settings": s, "installed": installed, "phase": s["phase"]}
+    if not installed:
         return snap
     info = system.unit_info([U_BITCOIND, U_TOR, U_FULCRUM, U_MEMPOOL])
     units = {unit: i["state"] for unit, i in info.items()}
     snap["units"] = units
+    unfinished = paths.APPLY_PENDING.exists()       # looked at first: see services.unfinished()
     snap["activity"] = services.activity()
+    snap["pending"] = services.UNFINISHED_NOTE if unfinished and not snap["activity"] else ""
     snap["bitcoin"] = _restarting(_bitcoin(s, units[U_BITCOIND]), info[U_BITCOIND])
     snap["tor"] = _restarting(_tor(s, units[U_TOR]), info[U_TOR])
     snap["fulcrum"] = _restarting(_fulcrum(s, units[U_FULCRUM], snap["bitcoin"]), info[U_FULCRUM])
@@ -369,9 +374,15 @@ def status_events(snap, seen: dict):
 
 # ----------------------------------------------------------------- actions --
 def apply_settings(report=None, **changes):
-    """Persist `changes` and converge services onto them: whatever needs a
-    restart is stopped safely and started again, in dependency order."""
-    return services.apply(settings.update(**changes), report=report)
+    """Persist `changes` and converge services onto what is stored: whatever needs a
+    restart is stopped safely and started again, in dependency order.
+
+    apply() reads the settings itself once it holds the lock, so of several changes
+    saved close together none is lost to an older one that happens to be applied later.
+    Without `changes` this finishes a change that was cut short (services.unfinished())."""
+    if changes:
+        settings.update(**changes)
+    return services.apply(report=report)
 
 
 def stop_all(report=None):
@@ -390,9 +401,28 @@ def shut_down(report=None):
 
 def safe_reboot(report=None):
     """Shut every service down cleanly, then restart the computer. Services
-    return by themselves after boot."""
+    return by themselves after boot — and right away if the computer does not
+    restart after all."""
     services.stop_everything(report)
-    system.run(["systemctl", "reboot"], timeout=60, check=True)
+    try:
+        system.run(["systemctl", "reboot"], timeout=60, check=True)
+    except RuntimeError:
+        services.apply(report=report)
+        raise
+
+
+def on_launch(report=None) -> bool:
+    """What opening the app owes the node: start it again after "Shut down the node",
+    or finish a change that was cut short (the app was closed or the computer switched
+    off in the middle of it). -> whether there was anything to do."""
+    s = settings.load()
+    if s["resume_on_launch"]:
+        start_all(report)
+    elif s["installed"] and not s["adopting"] and services.unfinished():
+        services.apply(report=report)
+    else:
+        return False
+    return True
 
 
 def tor_set(up: bool):
@@ -400,7 +430,7 @@ def tor_set(up: bool):
 
 
 def tor_reconnect():
-    system.systemctl("restart", U_TOR, check=True)
+    services.restart_unit(U_TOR, wait=True)
 
 
 def tor_new_identity():
@@ -408,12 +438,12 @@ def tor_new_identity():
 
 
 def restart(unit):
-    system.systemctl("--no-block", "restart", unit, check=True)
+    services.restart_unit(unit)
 
 
 def finalize_sync():
     """Initial block download is complete: switch Bitcoin Core from the sync
     profile to the full-service profile and bring up Tor, Fulcrum and Mempool."""
     s = settings.update(phase="ready")
-    services.apply(s)
+    services.apply()
     return s

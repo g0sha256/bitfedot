@@ -95,10 +95,11 @@ Add it to `self.pages` in `ui/window.py`. Need new data? Add it to `node.snapsho
 ## 5. Add a managed service
 
 1. `paths.py`: unit name, ports. 2. `services.py`: config + unit renderer (use `sandbox()`),
-   add both files to `write_configs()`, the unit to `desired_units()`, `LABELS`, `STOP_ORDER`
+   add both files to `config_files()`, the unit to `desired_units()`, `LABELS`, `STOP_ORDER`
    (consumers first), `STOP_TIMEOUT`, and `DEPENDENTS` if something must restart with it.
 3. Status in `node.snapshot()`, a card in `ui/overview.py`, a log entry in `ui/pages.py`.
-4. Extend `tests/test_core.py::SafeOrdering`.
+4. Extend `tests/test_core.py::SafeOrdering`, and give the unit a stand-in in
+   `tools/apply-rehearsal.py`.
 
 ## 6. Tune the sync time estimate
 
